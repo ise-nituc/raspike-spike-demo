@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOG_DIR="${REPO_DIR}/var/log"
+RUN_DIR="${REPO_DIR}/var/run"
+VISION_PID_FILE="${RUN_DIR}/vision.pid"
+
+mkdir -p "${LOG_DIR}" "${RUN_DIR}"
+
 echo "[start-demo] starting demo..."
 
-~/start-vision > ~/vision.log 2>&1 &
-echo $! > ~/vision.pid
+"${REPO_DIR}/scripts/start-vision" > "${LOG_DIR}/vision.log" 2>&1 &
+echo $! > "${VISION_PID_FILE}"
 
-echo "[start-demo] vision server started. PID=$(cat ~/vision.pid)"
+echo "[start-demo] vision server started. PID=$(cat "${VISION_PID_FILE}")"
 echo "[start-demo] waiting for vision server..."
 sleep 3
 
 echo "[start-demo] starting robot..."
-~/start-robot
-
+"${REPO_DIR}/scripts/start-robot"

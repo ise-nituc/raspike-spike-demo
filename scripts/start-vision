@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VISION_DIR="${REPO_DIR}/vision-server"
+
 echo "[start-vision] stopping old vision server..."
 pkill -f vision_server_picamera.py 2>/dev/null || true
 sleep 1
 
 echo "[start-vision] starting vision server..."
 
-cd ~/vision-server
+cd "${VISION_DIR}"
 source .venv/bin/activate
 
 exec python vision_server_picamera.py
-

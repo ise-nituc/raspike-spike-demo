@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PID_FILE="${REPO_DIR}/var/run/marker-controller.pid"
+
+if [ ! -f "${PID_FILE}" ]; then
+    echo "marker controller is not running (no PID file)"
+    exit 0
+fi
+
+PID="$(cat "${PID_FILE}")"
+if kill "${PID}" 2>/dev/null; then
+    echo "marker controller stopped (PID=${PID})"
+else
+    echo "marker controller was not running (stale PID: ${PID})"
+fi
+rm -f "${PID_FILE}"

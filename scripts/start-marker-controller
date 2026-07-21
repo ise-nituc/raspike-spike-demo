@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VISION_DIR="${REPO_DIR}/vision-server"
+LOG_DIR="${REPO_DIR}/var/log"
+RUN_DIR="${REPO_DIR}/var/run"
+PID_FILE="${RUN_DIR}/marker-controller.pid"
+
+mkdir -p "${LOG_DIR}" "${RUN_DIR}"
+
+if [ -f "${PID_FILE}" ] && kill -0 "$(cat "${PID_FILE}")" 2>/dev/null; then
+    echo "marker controller is already running (PID=$(cat "${PID_FILE}"))" >&2
+    exit 1
+fi
+
+cd "${VISION_DIR}"
+source .venv/bin/activate
+python marker_controller.py \
+    > "${LOG_DIR}/marker-controller.log" 2>&1 < /dev/null &
+PID=$!
+echo "${PID}" > "${PID_FILE}"
+
+echo "marker controller started (PID=${PID})"
+echo "log: ${LOG_DIR}/marker-controller.log"
+echo "open: http://<raspberry-pi-address>:8081/"
