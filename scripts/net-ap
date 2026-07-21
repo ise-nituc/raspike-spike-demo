@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+AP_CONN="raspike-ap"
+WIFI_CONN="netplan-wlan0-isepr"
+
+echo "Switching to AP mode..."
+
+sudo nmcli connection down "${WIFI_CONN}" 2>/dev/null || true
+sudo nmcli connection up "${AP_CONN}"
+
+echo
+echo "AP mode is active."
+echo "Connect from PC:"
+echo "  ssh iot@192.168.60.1"
+echo "  http://192.168.60.1:5000/"

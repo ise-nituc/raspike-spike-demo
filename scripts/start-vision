@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "[start-vision] stopping old vision server..."
+pkill -f vision_server_picamera.py 2>/dev/null || true
+sleep 1
+
+echo "[start-vision] starting vision server..."
+
+cd ~/vision-server
+source .venv/bin/activate
+
+exec python vision_server_picamera.py
+

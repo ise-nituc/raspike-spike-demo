@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "[start-demo] starting demo..."
+
+~/start-vision > ~/vision.log 2>&1 &
+echo $! > ~/vision.pid
+
+echo "[start-demo] vision server started. PID=$(cat ~/vision.pid)"
+echo "[start-demo] waiting for vision server..."
+sleep 3
+
+echo "[start-demo] starting robot..."
+~/start-robot
+

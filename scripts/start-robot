@@ -1,0 +1,7 @@
+#!/bin/bash
+
+cd ~/RasPike-ART/sdk/workspace || exit 1
+
+echo "Starting robot program..."
+make start
+

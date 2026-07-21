@@ -1,0 +1,14 @@
+#!/bin/bash
+
+echo "Stopping demo..."
+
+if [ -f ~/vision.pid ]; then
+    kill "$(cat ~/vision.pid)" 2>/dev/null
+    rm ~/vision.pid
+    echo "Vision server stopped."
+else
+    echo "No vision.pid found."
+fi
+
+echo "If robot program is still running, stop it with CTRL+C."
+
