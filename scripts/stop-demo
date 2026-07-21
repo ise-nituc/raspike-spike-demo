@@ -1,14 +1,21 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PID_FILE="${REPO_DIR}/var/run/vision.pid"
 
 echo "Stopping demo..."
 
-if [ -f ~/vision.pid ]; then
-    kill "$(cat ~/vision.pid)" 2>/dev/null
-    rm ~/vision.pid
-    echo "Vision server stopped."
+if [ -f "${PID_FILE}" ]; then
+    PID="$(cat "${PID_FILE}")"
+    if kill "${PID}" 2>/dev/null; then
+        echo "Vision server stopped."
+    else
+        echo "Vision server was not running (stale PID: ${PID})."
+    fi
+    rm -f "${PID_FILE}"
 else
-    echo "No vision.pid found."
+    echo "No vision PID file found."
 fi
 
 echo "If robot program is still running, stop it with CTRL+C."
-

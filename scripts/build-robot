@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROBOT_APP_DIR="${REPO_DIR}/robot/appdir"
+SDK_APP_DIR="${HOME}/RasPike-ART/sdk/workspace/appdir"
+SDK_WORKSPACE="${HOME}/RasPike-ART/sdk/workspace"
+
+if [ ! -L "${ROBOT_APP_DIR}" ]; then
+    echo "error: ${ROBOT_APP_DIR} must be a symlink to ${SDK_APP_DIR}" >&2
+    exit 1
+fi
+
+if [ "$(readlink -f "${ROBOT_APP_DIR}")" != "$(readlink -f "${SDK_APP_DIR}")" ]; then
+    echo "error: ${ROBOT_APP_DIR} does not point to ${SDK_APP_DIR}" >&2
+    exit 1
+fi
+
+echo "[build-robot] building RasPike application..."
+make -C "${SDK_WORKSPACE}" app=appdir

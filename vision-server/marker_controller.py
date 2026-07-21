@@ -24,10 +24,12 @@
 
 import time
 import math
+import threading
 from dataclasses import dataclass
 
 import cv2
 import numpy as np
+from flask import Flask, Response, jsonify, render_template_string
 from picamera2 import Picamera2
 
 
@@ -66,8 +68,20 @@ MIN_MARKER_DISTANCE = 20.0
 # 見失ったときに停止するまでの猶予秒数
 LOST_TIMEOUT_SEC = 0.3
 
-# 表示するかどうか
-SHOW_WINDOW = True
+# Webサーバ設定
+WEB_HOST = "0.0.0.0"
+WEB_PORT = 8081
+WEB_INTERVAL_SEC = 0.1
+JPEG_QUALITY = 70
+
+
+latest_frame = None
+latest_command = None
+latest_marker_found = False
+latest_processing_ms = 0.0
+state_lock = threading.Lock()
+
+app = Flask(__name__)
 
 
 # ============================================================
@@ -460,7 +474,12 @@ def draw_debug_view(frame_bgr, marker, cmd, processing_ms):
 # メイン
 # ============================================================
 
-def main():
+def vision_loop():
+    global latest_frame
+    global latest_command
+    global latest_marker_found
+    global latest_processing_ms
+
     picam2 = Picamera2()
 
     config = picam2.create_preview_configuration(
@@ -479,7 +498,7 @@ def main():
     last_seen_time = 0.0
     last_cmd = stop_command()
 
-    print("開始しました。q または ESC で終了します。")
+    print("marker detection started")
 
     try:
         while True:
@@ -507,24 +526,96 @@ def main():
             send_motor_command(cmd)
 
             processing_ms = (time.perf_counter() - loop_t0) * 1000.0
+            view = draw_debug_view(frame_bgr, marker, cmd, processing_ms)
 
-            if SHOW_WINDOW:
-                view = draw_debug_view(frame_bgr, marker, cmd, processing_ms)
-                cv2.imshow("marker controller", view)
-                cv2.imshow("red mask", red_mask)
-                cv2.imshow("green mask", green_mask)
-
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord("q") or key == 27:
-                    break
+            with state_lock:
+                latest_frame = view
+                latest_command = cmd
+                latest_marker_found = marker is not None
+                latest_processing_ms = processing_ms
 
     finally:
         # 終了時は停止指令を出す
         send_motor_command(stop_command())
         picam2.stop()
-        if SHOW_WINDOW:
-            cv2.destroyAllWindows()
         print("\n終了しました。")
+
+
+@app.route("/")
+def index():
+    return render_template_string("""
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Marker Controller</title>
+  <style>
+    body { font-family: sans-serif; margin: 0; background: #111; color: #eee; text-align: center; }
+    main { max-width: 960px; margin: auto; padding: 1rem; }
+    img { width: 100%; border: 2px solid #555; border-radius: 8px; }
+    code { color: #8f8; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Marker Controller</h1>
+    <p>赤・緑マーカーの検出結果とモーター指令を表示しています。</p>
+    <img src="/video" alt="marker detection video">
+    <p>数値データ: <code>/status</code></p>
+  </main>
+</body>
+</html>
+""")
+
+
+@app.route("/status")
+def status():
+    with state_lock:
+        cmd = latest_command
+        marker_found = latest_marker_found
+        processing_ms = latest_processing_ms
+
+    return jsonify({
+        "marker_found": marker_found,
+        "left_pwm": 0 if cmd is None else cmd.left_pwm,
+        "right_pwm": 0 if cmd is None else cmd.right_pwm,
+        "strength": 0.0 if cmd is None else cmd.strength,
+        "theta_deg": 0.0 if cmd is None else cmd.theta_deg,
+        "processing_ms": processing_ms,
+    })
+
+
+def generate_mjpeg():
+    while True:
+        with state_lock:
+            frame = None if latest_frame is None else latest_frame.copy()
+
+        if frame is not None:
+            encoded, jpeg = cv2.imencode(
+                ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
+            )
+            if encoded:
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
+                )
+
+        time.sleep(WEB_INTERVAL_SEC)
+
+
+@app.route("/video")
+def video():
+    return Response(
+        generate_mjpeg(), mimetype="multipart/x-mixed-replace; boundary=frame"
+    )
+
+
+def main():
+    vision_thread = threading.Thread(target=vision_loop, daemon=True)
+    vision_thread.start()
+    print(f"web server listening on http://{WEB_HOST}:{WEB_PORT}")
+    app.run(host=WEB_HOST, port=WEB_PORT, threaded=True)
 
 
 if __name__ == "__main__":
