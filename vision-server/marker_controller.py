@@ -485,6 +485,8 @@ def vision_loop():
     config = picam2.create_preview_configuration(
         main={
             "size": (WIDTH, HEIGHT),
+            # Picamera2/libcamera の RGB888 は、capture_array() では
+            # OpenCV が期待する B, G, R の順に並ぶ。
             "format": "RGB888",
         }
     )
@@ -504,8 +506,9 @@ def vision_loop():
         while True:
             loop_t0 = time.perf_counter()
 
-            frame_rgb = picam2.capture_array()
-            frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+            # RGB888 というフォーマット名に反して、配列のチャンネル順は
+            # OpenCV と同じ BGR。RGB とみなして入れ替えると赤と青が反転する。
+            frame_bgr = picam2.capture_array()
 
             marker, red_mask, green_mask = detect_marker(frame_bgr)
 
