@@ -2,19 +2,50 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ROBOT_APP_DIR="${REPO_DIR}/robot/appdir"
-SDK_APP_DIR="${HOME}/RasPike-ART/sdk/workspace/appdir"
 SDK_WORKSPACE="${HOME}/RasPike-ART/sdk/workspace"
+APP_NAME="${1:-appdir}"
 
-if [ ! -L "${ROBOT_APP_DIR}" ]; then
-    echo "error: ${ROBOT_APP_DIR} must be a symlink to ${SDK_APP_DIR}" >&2
+if [[ ! "${APP_NAME}" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "error: invalid application name: ${APP_NAME}" >&2
     exit 1
 fi
 
-if [ "$(readlink -f "${ROBOT_APP_DIR}")" != "$(readlink -f "${SDK_APP_DIR}")" ]; then
-    echo "error: ${ROBOT_APP_DIR} does not point to ${SDK_APP_DIR}" >&2
+if [ ! -d "${SDK_WORKSPACE}" ]; then
+    echo "error: RasPike-ART workspace not found: ${SDK_WORKSPACE}" >&2
     exit 1
 fi
 
-echo "[build-robot] building RasPike application..."
-make -C "${SDK_WORKSPACE}" app=appdir
+if [ "${APP_NAME}" = "appdir" ]; then
+    # 従来構成ではSDK側のappdirをrobot/appdirから参照する。
+    ROBOT_APP_DIR="${REPO_DIR}/robot/appdir"
+    SDK_APP_DIR="${SDK_WORKSPACE}/appdir"
+
+    if [ ! -L "${ROBOT_APP_DIR}" ] || \
+       [ "$(readlink -f "${ROBOT_APP_DIR}")" != "$(readlink -f "${SDK_APP_DIR}")" ]; then
+        echo "error: ${ROBOT_APP_DIR} must be a symlink to ${SDK_APP_DIR}" >&2
+        exit 1
+    fi
+else
+    # リポジトリ内のアプリをSDK workspaceから見えるようにする。
+    ROBOT_APP_DIR="${REPO_DIR}/robot/${APP_NAME}"
+    SDK_APP_DIR="${SDK_WORKSPACE}/${APP_NAME}"
+
+    if [ ! -d "${ROBOT_APP_DIR}" ]; then
+        echo "error: robot application not found: ${ROBOT_APP_DIR}" >&2
+        exit 1
+    fi
+
+    if [ -e "${SDK_APP_DIR}" ] || [ -L "${SDK_APP_DIR}" ]; then
+        if [ ! -L "${SDK_APP_DIR}" ] || \
+           [ "$(readlink -f "${SDK_APP_DIR}")" != "$(readlink -f "${ROBOT_APP_DIR}")" ]; then
+            echo "error: ${SDK_APP_DIR} already exists and does not point to ${ROBOT_APP_DIR}" >&2
+            exit 1
+        fi
+    else
+        ln -s "${ROBOT_APP_DIR}" "${SDK_APP_DIR}"
+        echo "[build-robot] linked ${SDK_APP_DIR} -> ${ROBOT_APP_DIR}"
+    fi
+fi
+
+echo "[build-robot] building RasPike application: ${APP_NAME}"
+make -C "${SDK_WORKSPACE}" app="${APP_NAME}"

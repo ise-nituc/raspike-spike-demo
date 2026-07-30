@@ -1,7 +1,25 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-cd ~/RasPike-ART/sdk/workspace || exit 1
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SDK_WORKSPACE="${HOME}/RasPike-ART/sdk/workspace"
 
-echo "Starting robot program..."
-make start
+if [ ! -d "${SDK_WORKSPACE}" ]; then
+    echo "error: RasPike-ART workspace not found: ${SDK_WORKSPACE}" >&2
+    exit 1
+fi
 
+if [ "$#" -gt 1 ]; then
+    echo "usage: $0 [robot-application-name]" >&2
+    exit 1
+fi
+
+if [ "$#" -eq 1 ]; then
+    # 実行対象を曖昧にしないため、指定されたアプリを正常にビルドしてから起動する。
+    "${REPO_DIR}/scripts/build-robot" "$1"
+else
+    echo "[start-robot] no application specified; starting the existing asp binary"
+fi
+
+echo "[start-robot] starting robot program..."
+make -C "${SDK_WORKSPACE}" start
