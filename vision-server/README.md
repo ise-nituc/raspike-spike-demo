@@ -23,6 +23,10 @@ JPEG出力に使用しています。
 重ねたカメラ画像を確認できます。`/status` では最新の検出有無、PWM値、角度などを
 JSONで確認できます。
 
+同時に `127.0.0.1:65432` でRasPike-ART向けTCPサーバーが起動します。クライアントが
+`GET\n` を送ると、最新の左右PWM値を `<left>:<right>\n` 形式で返します。TCPサーバーは
+ローカル接続だけを受け付けます。
+
 ログは `var/log/marker-controller.log`、PIDは
 `var/run/marker-controller.pid` に保存されます。停止用スクリプトも実行時の
 カレントディレクトリに依存しません。
@@ -44,3 +48,25 @@ ln -s "$HOME/RasPike-ART/sdk/workspace/appdir" robot/appdir
 
 シンボリックリンク先にある機体固有設定やビルド生成物は、このリポジトリには
 コミットしないでください。
+
+`robot/direct_pwm_camera` は、TCPサーバーから受信した左右PWM値を直接モーターへ
+設定する独立したRasPike-ARTアプリケーションです。通信値は `-100`～`100` に制限し、
+通信失敗時にはモーターを停止します。
+
+次のコマンドは、SDK workspaceへのシンボリックリンク作成、対象アプリのビルド、
+生成された `asp` の起動を順に行います。
+
+```console
+./scripts/start-robot direct_pwm_camera
+```
+
+ビルドと起動を分ける場合は、次のように実行します。
+
+```console
+./scripts/build-robot direct_pwm_camera
+./scripts/start-robot
+```
+
+引数なしの `start-robot` は既存の `asp`、つまり通常は最後に正常にビルドされたアプリを
+起動します。直前のビルドが失敗した場合は、それより前の `asp` が残る可能性があるため、
+通常はアプリ名を付けた起動を推奨します。

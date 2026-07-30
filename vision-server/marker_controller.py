@@ -24,6 +24,7 @@
 
 import time
 import math
+import socket
 import threading
 from dataclasses import dataclass
 
@@ -73,6 +74,10 @@ WEB_HOST = "0.0.0.0"
 WEB_PORT = 8081
 WEB_INTERVAL_SEC = 0.1
 JPEG_QUALITY = 70
+
+# RasPike-ARTは同じRaspberry Pi上で動作するため、TCPはローカルだけで待ち受ける
+TCP_HOST = "127.0.0.1"
+TCP_PORT = 65432
 
 
 latest_frame = None
@@ -363,6 +368,70 @@ def send_motor_command(cmd):
 
 
 # ============================================================
+# RasPike-ART向けTCPサーバ
+# ============================================================
+
+def get_latest_motor_command_text():
+    """
+    最新の左右PWM値を ``left:right`` 形式の1行テキストとして返す。
+    起動直後など、まだ制御値がない場合は停止値を返す。
+    """
+    with state_lock:
+        cmd = latest_command
+
+    if cmd is None:
+        return "0:0\n"
+
+    return f"{cmd.left_pwm}:{cmd.right_pwm}\n"
+
+
+def handle_tcp_client(conn, addr):
+    """
+    RasPike-ARTからの ``GET`` に対して最新の左右PWM値を返す。
+    接続を維持したまま、改行区切りの複数リクエストを処理する。
+    """
+    print(f"TCP client connected: {addr}")
+    receive_buffer = b""
+
+    with conn:
+        while True:
+            data = conn.recv(1024)
+            if not data:
+                return
+
+            receive_buffer += data
+
+            while b"\n" in receive_buffer:
+                request_line, receive_buffer = receive_buffer.split(b"\n", 1)
+                request = request_line.decode(errors="ignore").strip()
+
+                if request == "GET":
+                    response = get_latest_motor_command_text()
+                else:
+                    response = "ERROR unknown command\n"
+
+                conn.sendall(response.encode())
+
+
+def tcp_server_loop():
+    """同じRaspberry Pi上のRasPike-ART向けTCPサーバ。"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_socket.bind((TCP_HOST, TCP_PORT))
+        server_socket.listen()
+
+        print(f"motor command TCP server listening on {TCP_HOST}:{TCP_PORT}")
+
+        while True:
+            conn, addr = server_socket.accept()
+            try:
+                handle_tcp_client(conn, addr)
+            except (ConnectionError, OSError) as error:
+                # クライアントが異常切断しても待受スレッドは継続する。
+                print(f"TCP client disconnected with error: {error}")
+
+
+# ============================================================
 # 描画
 # ============================================================
 
@@ -616,7 +685,9 @@ def video():
 
 def main():
     vision_thread = threading.Thread(target=vision_loop, daemon=True)
+    tcp_thread = threading.Thread(target=tcp_server_loop, daemon=True)
     vision_thread.start()
+    tcp_thread.start()
     print(f"web server listening on http://{WEB_HOST}:{WEB_PORT}")
     app.run(host=WEB_HOST, port=WEB_PORT, threaded=True)
 
