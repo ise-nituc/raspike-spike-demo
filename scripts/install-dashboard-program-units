@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_USER="${SUDO_USER:-${USER}}"
 SYSTEMCTL="$(command -v systemctl)"
+ENV="$(command -v env)"
 RUN_HOME="$(getent passwd "${RUN_USER}" | cut -d: -f6)"
 ENABLE_DASHBOARD=false
 
@@ -42,6 +43,9 @@ SUDOERS_FILE="/etc/sudoers.d/raspike-dashboard"
     while read -r action; do
         echo "${RUN_USER} ALL=(root) NOPASSWD: ${SYSTEMCTL} ${action}"
     done < <(python3 -c 'import json,sys; a=json.load(open(sys.argv[1]))["dashboard"].get("system_actions", []); assert all(x in {"reboot", "poweroff"} for x in a), "invalid system action"; print(*a, sep="\n")' "${REPO_DIR}/dashboard/programs.json")
+    # RasPike-ART's `make start` uses this exact sudo command.  Robot services
+    # have no terminal, so authorize only that fixed command without a password.
+    echo "${RUN_USER} ALL=(root) NOPASSWD: ${ENV} LD_PRELOAD=../common/setjmp/aarch64/libssetjmp.so ./asp -d ../common/device_config_raspike-art.txt"
 } | sudo tee "${SUDOERS_FILE}" >/dev/null
 sudo chmod 0440 "${SUDOERS_FILE}"
 sudo visudo -cf "${SUDOERS_FILE}" >/dev/null

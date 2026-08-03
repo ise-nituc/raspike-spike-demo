@@ -61,6 +61,9 @@ Python プログラムのカードには、実際にダッシュボードへア�
 `make start` を実行します。「停止」は systemd の control group 全体へ `SIGKILL` を送り、
 `make` とその子プロセスを強制停止します。対応する Python サーバーが未起動の場合は、
 systemd の依存関係によって先に自動起動します。また、ロボットプログラム同士も排他起動です。
+`make start` が内部で実行する固定の RasPike-ART 起動コマンドにはパスワードなしの `sudo` が
+必要なため、既に unit をインストール済みの場合も `scripts/install-dashboard-program-units` を
+再実行して sudoers 設定を更新してください。
 
 ### 再起動と電源オフ
 
