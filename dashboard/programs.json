@@ -34,6 +34,13 @@
       "label": "カメラ直接PWM制御",
       "description": "マーカー追従の左右PWM値でロボットを制御します。先にマーカー追従を起動してください。",
       "unit": "raspike-direct-pwm-camera.service"
+    },
+    {
+      "id": "ocan2026",
+      "category": "raspike-art",
+      "label": "2026 オープンキャンパス",
+      "description": "光センサーの反射率を使ってライントレースする、2026年オープンキャンパス用プログラムです。",
+      "unit": "raspike-ocan2026.service"
     }
   ]
 }

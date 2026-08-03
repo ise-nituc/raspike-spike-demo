@@ -36,7 +36,7 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             [p["id"] for p in response.json],
-            ["vision-server", "marker-controller", "line-trace-camera", "direct-pwm-camera"],
+            ["vision-server", "marker-controller", "line-trace-camera", "direct-pwm-camera", "ocan2026"],
         )
         self.assertTrue(all(p["active_state"] == "inactive" for p in response.json))
         self.assertEqual(response.json[0]["web_url"], "http://localhost:8080/")

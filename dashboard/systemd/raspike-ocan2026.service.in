@@ -1,0 +1,16 @@
+[Unit]
+Description=Raspike 2026 open campus robot
+Conflicts=raspike-line-trace-camera.service raspike-direct-pwm-camera.service
+
+[Service]
+Type=simple
+User=@USER@
+Environment=HOME=@HOME@
+WorkingDirectory=@REPO@
+ExecStart=@REPO@/scripts/start-robot ocan2026
+Restart=no
+KillMode=control-group
+KillSignal=SIGKILL
+
+[Install]
+WantedBy=multi-user.target
