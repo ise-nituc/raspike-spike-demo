@@ -8,8 +8,11 @@ RUN_HOME="$(getent passwd "${RUN_USER}" | cut -d: -f6)"
 
 for template in "${REPO_DIR}"/dashboard/systemd/*.service.in; do
     destination="/etc/systemd/system/$(basename "${template}" .in)"
+    unit="$(basename "${template}" .in)"
+    web_port="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1]))["programs"]; print(next((x.get("web_port", "") for x in p if x["unit"] == sys.argv[2]), ""))' "${REPO_DIR}/dashboard/programs.json" "${unit}")"
     sed -e "s|@REPO@|${REPO_DIR}|g" -e "s|@USER@|${RUN_USER}|g" \
-        -e "s|@HOME@|${RUN_HOME}|g" "${template}" | sudo tee "${destination}" >/dev/null
+        -e "s|@HOME@|${RUN_HOME}|g" -e "s|@WEB_PORT@|${web_port}|g" \
+        "${template}" | sudo tee "${destination}" >/dev/null
     echo "installed ${destination}"
 done
 

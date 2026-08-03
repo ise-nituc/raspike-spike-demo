@@ -22,6 +22,10 @@ class DashboardTest(unittest.TestCase):
         self.app.config.update(TESTING=True, SECRET_KEY="test")
         self.client = self.app.test_client()
 
+    def test_dashboard_port_comes_from_manifest(self):
+        self.assertEqual(self.app.config["DASHBOARD_HOST"], "0.0.0.0")
+        self.assertEqual(self.app.config["DASHBOARD_PORT"], 5000)
+
     def token(self):
         self.client.get("/")
         with self.client.session_transaction() as session:

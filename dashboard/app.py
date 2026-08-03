@@ -52,6 +52,15 @@ def load_programs(path: Path) -> dict[str, Program]:
     return programs
 
 
+def load_dashboard_settings(path: Path) -> tuple[str, int]:
+    settings = json.loads(path.read_text(encoding="utf-8")).get("dashboard", {})
+    host = settings.get("host", "0.0.0.0")
+    port = settings.get("web_port")
+    if not isinstance(host, str) or not host or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ValueError("invalid dashboard host or web port")
+    return host, port
+
+
 def run_command(argv: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(argv, text=True, capture_output=True, timeout=10, check=False)
 
@@ -62,7 +71,10 @@ def create_app(
 ) -> Flask:
     app = Flask(__name__)
     app.secret_key = os.environ.get("RASPIKE_DASHBOARD_SECRET", secrets.token_hex(32))
-    programs = load_programs(manifest or BASE_DIR / "programs.json")
+    manifest_path = manifest or BASE_DIR / "programs.json"
+    programs = load_programs(manifest_path)
+    dashboard_host, dashboard_port = load_dashboard_settings(manifest_path)
+    app.config.update(DASHBOARD_HOST=dashboard_host, DASHBOARD_PORT=dashboard_port)
 
     def program_or_404(program_id: str) -> Program:
         program = programs.get(program_id)
@@ -150,4 +162,8 @@ def create_app(
 
 
 if __name__ == "__main__":
-    create_app().run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))
+    application = create_app()
+    application.run(
+        host=application.config["DASHBOARD_HOST"],
+        port=application.config["DASHBOARD_PORT"],
+    )

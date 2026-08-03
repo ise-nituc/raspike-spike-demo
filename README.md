@@ -43,6 +43,10 @@ Python プログラムのカードには、実際にダッシュボードへア�
 8081 を使うため Web ポートは競合しません。ただし二つの Python プログラムは同じカメラを
 使うため排他起動され、一方を実行するともう一方は停止します。
 
+ダッシュボードと各 Python プログラムのポート番号は `dashboard/programs.json` で一元管理
+しています。ポートを変更した場合は `scripts/install-dashboard-program-units` を再実行してから
+ダッシュボードを起動してください。
+
 ロボットプログラムの「実行」は対象アプリをビルドした後、RasPike-ART workspace で
 `make start` を実行します。「停止」は systemd の control group 全体へ `SIGKILL` を送り、
 `make` とその子プロセスを強制停止します。対応する Python サーバーが未起動の場合は、

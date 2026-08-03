@@ -1,4 +1,8 @@
 {
+  "dashboard": {
+    "host": "0.0.0.0",
+    "web_port": 5000
+  },
   "programs": [
     {
       "id": "vision-server",
