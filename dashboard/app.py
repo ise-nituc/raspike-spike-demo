@@ -32,6 +32,7 @@ class Program:
     label: str
     description: str
     unit: str
+    web_port: int | None = None
 
 
 def load_programs(path: Path) -> dict[str, Program]:
@@ -43,6 +44,8 @@ def load_programs(path: Path) -> dict[str, Program]:
             raise ValueError(f"invalid program registration: {program.id!r}")
         if program.id in programs or program.category not in {"python", "raspike-art"}:
             raise ValueError(f"invalid or duplicate program: {program.id!r}")
+        if program.web_port is not None and not 1 <= program.web_port <= 65535:
+            raise ValueError(f"invalid web port for program: {program.id!r}")
         programs[program.id] = program
     if not programs:
         raise ValueError("the program manifest is empty")
@@ -95,9 +98,15 @@ def create_app(
 
     @app.get("/api/programs")
     def list_programs():
-        return jsonify([
-            {**program.__dict__, **state(program)} for program in programs.values()
-        ])
+        browser_host = request.host.rsplit(":", 1)[0]
+        result = []
+        for program in programs.values():
+            item = {**program.__dict__, **state(program)}
+            item["web_url"] = (
+                f"http://{browser_host}:{program.web_port}/" if program.web_port else None
+            )
+            result.append(item)
+        return jsonify(result)
 
     @app.post("/api/programs/<program_id>/<action>")
     def change_program(program_id: str, action: str):

@@ -30,8 +30,13 @@ class DashboardTest(unittest.TestCase):
     def test_manifest_is_returned_with_real_state(self):
         response = self.client.get("/api/programs")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual([p["id"] for p in response.json], ["vision-server", "marker-controller"])
+        self.assertEqual(
+            [p["id"] for p in response.json],
+            ["vision-server", "marker-controller", "line-trace-camera", "direct-pwm-camera"],
+        )
         self.assertTrue(all(p["active_state"] == "inactive" for p in response.json))
+        self.assertEqual(response.json[0]["web_url"], "http://localhost:8080/")
+        self.assertIsNone(response.json[2]["web_url"])
 
     def test_only_registered_program_can_start(self):
         headers = {"X-CSRF-Token": self.token()}

@@ -22,4 +22,4 @@ else
 fi
 
 echo "[start-robot] starting robot program..."
-make -C "${SDK_WORKSPACE}" start
+exec make -C "${SDK_WORKSPACE}" start

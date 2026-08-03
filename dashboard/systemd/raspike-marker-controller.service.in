@@ -1,6 +1,7 @@
 [Unit]
 Description=Raspike marker controller
 After=network.target
+Conflicts=raspike-vision-server.service
 
 [Service]
 Type=simple

@@ -1,0 +1,18 @@
+[Unit]
+Description=Raspike direct PWM camera robot
+After=raspike-marker-controller.service
+Requires=raspike-marker-controller.service
+Conflicts=raspike-line-trace-camera.service
+
+[Service]
+Type=simple
+User=@USER@
+Environment=HOME=@HOME@
+WorkingDirectory=@REPO@
+ExecStart=@REPO@/scripts/start-robot direct_pwm_camera
+Restart=no
+KillMode=control-group
+KillSignal=SIGKILL
+
+[Install]
+WantedBy=multi-user.target
