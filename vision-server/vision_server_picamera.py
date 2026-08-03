@@ -1,3 +1,4 @@
+import os
 import socket
 import threading
 import time
@@ -13,7 +14,7 @@ HOST = "127.0.0.1"
 PORT = 65432
 
 WEB_HOST = "0.0.0.0"
-WEB_PORT = 8080
+WEB_PORT = int(os.environ.get("RASPIKE_WEB_PORT", "8080"))
 
 # デモ時は False 推奨
 DEBUG = False

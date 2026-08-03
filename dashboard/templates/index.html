@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Raspike ダッシュボード</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+</head>
+<body>
+  <header><div><p class="eyebrow">Raspike-ART DEMO</p><h1>デモ ダッシュボード</h1></div><span id="connection">接続中…</span></header>
+  <main>
+    <section id="system" class="system" aria-label="システム情報"></section>
+    <section><div class="section-title"><div><p class="eyebrow">PROGRAMS</p><h2>プログラム</h2></div><button id="refresh" class="secondary">更新</button></div><div id="programs" class="programs"><p>読み込み中…</p></div></section>
+    <section class="power"><div><p class="eyebrow">SYSTEM</p><h2>電源操作</h2><p class="description">実行中のプログラムを停止してから操作してください。</p></div><div class="actions"><button class="secondary" data-system-action="reboot">再起動</button><button class="stop" data-system-action="poweroff">電源オフ</button></div></section>
+    <dialog id="logs"><div class="dialog-title"><h2 id="log-title">ログ</h2><button id="close-log" class="secondary">閉じる</button></div><pre id="log-body"></pre></dialog>
+  </main>
+  <script>window.DASHBOARD_CSRF = {{ csrf_token|tojson }};</script>
+  <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>

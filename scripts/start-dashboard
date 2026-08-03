@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${REPO_DIR}/dashboard"
+
+if [[ ! -x .venv/bin/python ]]; then
+    echo "error: dashboard environment is missing" >&2
+    echo "create it with: python3 -m venv dashboard/.venv && dashboard/.venv/bin/pip install -r dashboard/requirements.txt" >&2
+    exit 1
+fi
+
+PORT="$(.venv/bin/python -c 'import json; print(json.load(open("programs.json"))["dashboard"]["web_port"])')"
+echo "Dashboard: http://$(hostname -I | awk '{print $1}'):${PORT}/"
+exec .venv/bin/python app.py

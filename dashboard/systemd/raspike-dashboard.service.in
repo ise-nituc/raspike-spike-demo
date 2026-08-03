@@ -1,0 +1,15 @@
+[Unit]
+Description=Raspike demo dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=@USER@
+Environment=HOME=@HOME@
+WorkingDirectory=@REPO@/dashboard
+ExecStart=@REPO@/dashboard/.venv/bin/python @REPO@/dashboard/app.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
