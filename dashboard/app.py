@@ -32,6 +32,7 @@ class Program:
     label: str
     description: str
     unit: str
+    web_port: int | None = None
 
 
 def load_programs(path: Path) -> dict[str, Program]:
@@ -43,10 +44,24 @@ def load_programs(path: Path) -> dict[str, Program]:
             raise ValueError(f"invalid program registration: {program.id!r}")
         if program.id in programs or program.category not in {"python", "raspike-art"}:
             raise ValueError(f"invalid or duplicate program: {program.id!r}")
+        if program.web_port is not None and not 1 <= program.web_port <= 65535:
+            raise ValueError(f"invalid web port for program: {program.id!r}")
         programs[program.id] = program
     if not programs:
         raise ValueError("the program manifest is empty")
     return programs
+
+
+def load_dashboard_settings(path: Path) -> tuple[str, int, frozenset[str]]:
+    settings = json.loads(path.read_text(encoding="utf-8")).get("dashboard", {})
+    host = settings.get("host", "0.0.0.0")
+    port = settings.get("web_port")
+    actions = settings.get("system_actions", [])
+    if not isinstance(host, str) or not host or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ValueError("invalid dashboard host or web port")
+    if not isinstance(actions, list) or not all(action in {"reboot", "poweroff"} for action in actions):
+        raise ValueError("invalid dashboard system action")
+    return host, port, frozenset(actions)
 
 
 def run_command(argv: list[str]) -> subprocess.CompletedProcess[str]:
@@ -59,7 +74,10 @@ def create_app(
 ) -> Flask:
     app = Flask(__name__)
     app.secret_key = os.environ.get("RASPIKE_DASHBOARD_SECRET", secrets.token_hex(32))
-    programs = load_programs(manifest or BASE_DIR / "programs.json")
+    manifest_path = manifest or BASE_DIR / "programs.json"
+    programs = load_programs(manifest_path)
+    dashboard_host, dashboard_port, system_actions = load_dashboard_settings(manifest_path)
+    app.config.update(DASHBOARD_HOST=dashboard_host, DASHBOARD_PORT=dashboard_port)
 
     def program_or_404(program_id: str) -> Program:
         program = programs.get(program_id)
@@ -95,9 +113,15 @@ def create_app(
 
     @app.get("/api/programs")
     def list_programs():
-        return jsonify([
-            {**program.__dict__, **state(program)} for program in programs.values()
-        ])
+        browser_host = request.host.rsplit(":", 1)[0]
+        result = []
+        for program in programs.values():
+            item = {**program.__dict__, **state(program)}
+            item["web_url"] = (
+                f"http://{browser_host}:{program.web_port}/" if program.web_port else None
+            )
+            result.append(item)
+        return jsonify(result)
 
     @app.post("/api/programs/<program_id>/<action>")
     def change_program(program_id: str, action: str):
@@ -137,8 +161,22 @@ def create_app(
             uptime_seconds=time.monotonic(),
         )
 
+    @app.post("/api/system/<action>")
+    def change_system_state(action: str):
+        require_csrf()
+        if action not in system_actions:
+            abort(404, description="許可されていないシステム操作です")
+        result = systemctl(action)
+        if result.returncode:
+            return jsonify(error=(result.stderr.strip() or "systemctl failed")), 503
+        return jsonify(action=action, accepted=True)
+
     return app
 
 
 if __name__ == "__main__":
-    create_app().run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))
+    application = create_app()
+    application.run(
+        host=application.config["DASHBOARD_HOST"],
+        port=application.config["DASHBOARD_PORT"],
+    )

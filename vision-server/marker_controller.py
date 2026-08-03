@@ -22,6 +22,7 @@
     左    : 左旋回
 """
 
+import os
 import time
 import math
 import socket
@@ -71,7 +72,7 @@ LOST_TIMEOUT_SEC = 0.3
 
 # Webサーバ設定
 WEB_HOST = "0.0.0.0"
-WEB_PORT = 8081
+WEB_PORT = int(os.environ.get("RASPIKE_WEB_PORT", "8081"))
 WEB_INTERVAL_SEC = 0.1
 JPEG_QUALITY = 70
 

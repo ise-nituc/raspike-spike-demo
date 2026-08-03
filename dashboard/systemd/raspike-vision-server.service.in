@@ -1,10 +1,12 @@
 [Unit]
 Description=Raspike vision server
 After=network.target
+Conflicts=raspike-marker-controller.service
 
 [Service]
 Type=simple
 User=@USER@
+Environment=RASPIKE_WEB_PORT=@WEB_PORT@
 WorkingDirectory=@REPO@/vision-server
 ExecStart=@REPO@/vision-server/.venv/bin/python @REPO@/vision-server/vision_server_picamera.py
 Restart=on-failure

@@ -1,18 +1,39 @@
 {
+  "dashboard": {
+    "host": "0.0.0.0",
+    "web_port": 5000,
+    "system_actions": ["reboot", "poweroff"]
+  },
   "programs": [
     {
       "id": "vision-server",
       "category": "python",
       "label": "画像認識サーバー",
       "description": "カメラ画像から走行ラインを検出し、認識結果を配信します。",
-      "unit": "raspike-vision-server.service"
+      "unit": "raspike-vision-server.service",
+      "web_port": 8080
     },
     {
       "id": "marker-controller",
       "category": "python",
       "label": "マーカー追従",
       "description": "赤・緑のマーカーを検出する操作画面を配信します。",
-      "unit": "raspike-marker-controller.service"
+      "unit": "raspike-marker-controller.service",
+      "web_port": 8081
+    },
+    {
+      "id": "line-trace-camera",
+      "category": "raspike-art",
+      "label": "カメラ・ライントレース",
+      "description": "画像認識サーバーの結果を使ってライントレースします。先に画像認識サーバーを起動してください。",
+      "unit": "raspike-line-trace-camera.service"
+    },
+    {
+      "id": "direct-pwm-camera",
+      "category": "raspike-art",
+      "label": "カメラ直接PWM制御",
+      "description": "マーカー追従の左右PWM値でロボットを制御します。先にマーカー追従を起動してください。",
+      "unit": "raspike-direct-pwm-camera.service"
     }
   ]
 }

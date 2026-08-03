@@ -22,6 +22,10 @@ class DashboardTest(unittest.TestCase):
         self.app.config.update(TESTING=True, SECRET_KEY="test")
         self.client = self.app.test_client()
 
+    def test_dashboard_port_comes_from_manifest(self):
+        self.assertEqual(self.app.config["DASHBOARD_HOST"], "0.0.0.0")
+        self.assertEqual(self.app.config["DASHBOARD_PORT"], 5000)
+
     def token(self):
         self.client.get("/")
         with self.client.session_transaction() as session:
@@ -30,8 +34,13 @@ class DashboardTest(unittest.TestCase):
     def test_manifest_is_returned_with_real_state(self):
         response = self.client.get("/api/programs")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual([p["id"] for p in response.json], ["vision-server", "marker-controller"])
+        self.assertEqual(
+            [p["id"] for p in response.json],
+            ["vision-server", "marker-controller", "line-trace-camera", "direct-pwm-camera"],
+        )
         self.assertTrue(all(p["active_state"] == "inactive" for p in response.json))
+        self.assertEqual(response.json[0]["web_url"], "http://localhost:8080/")
+        self.assertIsNone(response.json[2]["web_url"])
 
     def test_only_registered_program_can_start(self):
         headers = {"X-CSRF-Token": self.token()}
@@ -41,6 +50,13 @@ class DashboardTest(unittest.TestCase):
 
     def test_state_change_requires_csrf(self):
         self.assertEqual(self.client.post("/api/programs/vision-server/stop").status_code, 403)
+
+    def test_reboot_is_manifest_limited_and_requires_csrf(self):
+        self.assertEqual(self.client.post("/api/system/reboot").status_code, 403)
+        headers = {"X-CSRF-Token": self.token()}
+        self.assertEqual(self.client.post("/api/system/reboot", headers=headers).status_code, 200)
+        self.assertIn(["sudo", "-n", "systemctl", "reboot"], self.commands.calls)
+        self.assertEqual(self.client.post("/api/system/halt", headers=headers).status_code, 404)
 
     def test_logs_use_fixed_unit_and_bounded_lines(self):
         response = self.client.get("/api/programs/marker-controller/logs?lines=9999")

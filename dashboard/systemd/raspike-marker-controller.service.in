@@ -1,10 +1,12 @@
 [Unit]
 Description=Raspike marker controller
 After=network.target
+Conflicts=raspike-vision-server.service
 
 [Service]
 Type=simple
 User=@USER@
+Environment=RASPIKE_WEB_PORT=@WEB_PORT@
 WorkingDirectory=@REPO@/vision-server
 ExecStart=@REPO@/vision-server/.venv/bin/python @REPO@/vision-server/marker_controller.py
 Restart=on-failure
