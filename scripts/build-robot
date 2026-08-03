@@ -26,25 +26,36 @@ if [ "${APP_NAME}" = "appdir" ]; then
         exit 1
     fi
 else
-    # リポジトリ内のアプリをSDK workspaceから見えるようにする。
+    # Makefile.workspace はアプリのパスを workspace 基準で組み立てるため、
+    # workspace 外へのシンボリックリンクでは Makefile.inc の参照先がずれる。
+    # リポジトリ内のアプリを workspace へコピーしてからビルドする。
     ROBOT_APP_DIR="${REPO_DIR}/robot/${APP_NAME}"
     SDK_APP_DIR="${SDK_WORKSPACE}/${APP_NAME}"
+    SOURCE_MARKER="${SDK_APP_DIR}/.raspike-spike-demo-source"
 
     if [ ! -d "${ROBOT_APP_DIR}" ]; then
         echo "error: robot application not found: ${ROBOT_APP_DIR}" >&2
         exit 1
     fi
 
-    if [ -e "${SDK_APP_DIR}" ] || [ -L "${SDK_APP_DIR}" ]; then
-        if [ ! -L "${SDK_APP_DIR}" ] || \
-           [ "$(readlink -f "${SDK_APP_DIR}")" != "$(readlink -f "${ROBOT_APP_DIR}")" ]; then
+    if [ -L "${SDK_APP_DIR}" ]; then
+        if [ "$(readlink -f "${SDK_APP_DIR}")" != "$(readlink -f "${ROBOT_APP_DIR}")" ]; then
             echo "error: ${SDK_APP_DIR} already exists and does not point to ${ROBOT_APP_DIR}" >&2
             exit 1
         fi
-    else
-        ln -s "${ROBOT_APP_DIR}" "${SDK_APP_DIR}"
-        echo "[build-robot] linked ${SDK_APP_DIR} -> ${ROBOT_APP_DIR}"
+        rm "${SDK_APP_DIR}"
+    elif [ -e "${SDK_APP_DIR}" ]; then
+        if [ ! -f "${SOURCE_MARKER}" ] || [ "$(cat "${SOURCE_MARKER}")" != "${ROBOT_APP_DIR}" ]; then
+            echo "error: ${SDK_APP_DIR} already exists and is not managed by this script" >&2
+            exit 1
+        fi
+        rm -rf "${SDK_APP_DIR}"
     fi
+
+    mkdir "${SDK_APP_DIR}"
+    cp -a "${ROBOT_APP_DIR}/." "${SDK_APP_DIR}/"
+    printf '%s\n' "${ROBOT_APP_DIR}" > "${SOURCE_MARKER}"
+    echo "[build-robot] copied ${ROBOT_APP_DIR} -> ${SDK_APP_DIR}"
 fi
 
 echo "[build-robot] building RasPike application: ${APP_NAME}"
