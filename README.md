@@ -27,6 +27,16 @@ Web サーバーは全インターフェースのポート 5000 で待ち受け�
 ネットワーク（AP モードでは `raspike-ap`）へ接続し、画面に表示された URL、または
 `http://192.168.60.1:5000/` を開いてください。終了はコンソールで `Ctrl+C` を押します。
 
+ダッシュボードを Raspberry Pi の起動時に自動起動したい場合は、初期設定の最後のコマンドに
+`--enable-dashboard` を付けます。この指定がない場合は、従来どおり自動起動の状態を変更しません。
+
+```console
+scripts/install-dashboard-program-units --enable-dashboard
+```
+
+このオプションは `raspike-dashboard.service` を `systemctl enable --now` し、その場での起動と
+次回以降のOS起動時の自動起動を設定します。プログラム用unitは自動起動されません。
+
 インストールスクリプトは、manifest に登録した unit に対する固定された操作だけを
 sudoers へ登録し、ログ閲覧用グループを追加します。実行後は一度ログアウトして反映して
 ください。任意の unit やコマンドは実行できず、Web サーバー自体も root では起動しません。

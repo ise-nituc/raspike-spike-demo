@@ -5,6 +5,21 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_USER="${SUDO_USER:-${USER}}"
 SYSTEMCTL="$(command -v systemctl)"
 RUN_HOME="$(getent passwd "${RUN_USER}" | cut -d: -f6)"
+ENABLE_DASHBOARD=false
+
+if [[ "${1:-}" == "--enable-dashboard" ]]; then
+    ENABLE_DASHBOARD=true
+    shift
+fi
+if (( $# != 0 )); then
+    echo "usage: $0 [--enable-dashboard]" >&2
+    exit 2
+fi
+if [[ ! -x "${REPO_DIR}/dashboard/.venv/bin/python" ]]; then
+    echo "error: dashboard environment is missing" >&2
+    echo "create it before installing: python3 -m venv dashboard/.venv && dashboard/.venv/bin/pip install -r dashboard/requirements.txt" >&2
+    exit 1
+fi
 
 for template in "${REPO_DIR}"/dashboard/systemd/*.service.in; do
     destination="/etc/systemd/system/$(basename "${template}" .in)"
@@ -34,3 +49,11 @@ sudo usermod -aG systemd-journal "${RUN_USER}"
 sudo systemctl daemon-reload
 echo "Program units and limited dashboard permissions installed (units were not enabled or started)."
 echo "Log out and back in once to enable journal access."
+
+if [[ "${ENABLE_DASHBOARD}" == true ]]; then
+    sudo systemctl enable --now raspike-dashboard.service
+    echo "Dashboard enabled and started: it will start automatically at boot."
+else
+    echo "Dashboard unit installed but its current enable/disable state was not changed."
+    echo "To enable it at boot, run this script again with --enable-dashboard."
+fi
