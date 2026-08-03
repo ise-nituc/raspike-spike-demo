@@ -52,13 +52,16 @@ def load_programs(path: Path) -> dict[str, Program]:
     return programs
 
 
-def load_dashboard_settings(path: Path) -> tuple[str, int]:
+def load_dashboard_settings(path: Path) -> tuple[str, int, frozenset[str]]:
     settings = json.loads(path.read_text(encoding="utf-8")).get("dashboard", {})
     host = settings.get("host", "0.0.0.0")
     port = settings.get("web_port")
+    actions = settings.get("system_actions", [])
     if not isinstance(host, str) or not host or not isinstance(port, int) or not 1 <= port <= 65535:
         raise ValueError("invalid dashboard host or web port")
-    return host, port
+    if not isinstance(actions, list) or not all(action in {"reboot", "poweroff"} for action in actions):
+        raise ValueError("invalid dashboard system action")
+    return host, port, frozenset(actions)
 
 
 def run_command(argv: list[str]) -> subprocess.CompletedProcess[str]:
@@ -73,7 +76,7 @@ def create_app(
     app.secret_key = os.environ.get("RASPIKE_DASHBOARD_SECRET", secrets.token_hex(32))
     manifest_path = manifest or BASE_DIR / "programs.json"
     programs = load_programs(manifest_path)
-    dashboard_host, dashboard_port = load_dashboard_settings(manifest_path)
+    dashboard_host, dashboard_port, system_actions = load_dashboard_settings(manifest_path)
     app.config.update(DASHBOARD_HOST=dashboard_host, DASHBOARD_PORT=dashboard_port)
 
     def program_or_404(program_id: str) -> Program:
@@ -157,6 +160,16 @@ def create_app(
             disk_free_bytes=disk.f_bavail * disk.f_frsize,
             uptime_seconds=time.monotonic(),
         )
+
+    @app.post("/api/system/<action>")
+    def change_system_state(action: str):
+        require_csrf()
+        if action not in system_actions:
+            abort(404, description="許可されていないシステム操作です")
+        result = systemctl(action)
+        if result.returncode:
+            return jsonify(error=(result.stderr.strip() or "systemctl failed")), 503
+        return jsonify(action=action, accepted=True)
 
     return app
 

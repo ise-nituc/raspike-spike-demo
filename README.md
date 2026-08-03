@@ -51,3 +51,9 @@ Python プログラムのカードには、実際にダッシュボードへア�
 `make start` を実行します。「停止」は systemd の control group 全体へ `SIGKILL` を送り、
 `make` とその子プロセスを強制停止します。対応する Python サーバーが未起動の場合は、
 systemd の依存関係によって先に自動起動します。また、ロボットプログラム同士も排他起動です。
+
+### 再起動と電源オフ
+
+画面下部の「再起動」と「電源オフ」から、確認後に Raspberry Pi を操作できます。インストール
+スクリプトは `dashboard/programs.json` の `system_actions` に明示した `systemctl reboot` と
+`systemctl poweroff` だけをパスワードなしで許可します。任意の sudo コマンドは実行できません。

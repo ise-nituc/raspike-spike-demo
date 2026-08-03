@@ -51,6 +51,13 @@ class DashboardTest(unittest.TestCase):
     def test_state_change_requires_csrf(self):
         self.assertEqual(self.client.post("/api/programs/vision-server/stop").status_code, 403)
 
+    def test_reboot_is_manifest_limited_and_requires_csrf(self):
+        self.assertEqual(self.client.post("/api/system/reboot").status_code, 403)
+        headers = {"X-CSRF-Token": self.token()}
+        self.assertEqual(self.client.post("/api/system/reboot", headers=headers).status_code, 200)
+        self.assertIn(["sudo", "-n", "systemctl", "reboot"], self.commands.calls)
+        self.assertEqual(self.client.post("/api/system/halt", headers=headers).status_code, 404)
+
     def test_logs_use_fixed_unit_and_bounded_lines(self):
         response = self.client.get("/api/programs/marker-controller/logs?lines=9999")
         self.assertEqual(response.status_code, 200)
