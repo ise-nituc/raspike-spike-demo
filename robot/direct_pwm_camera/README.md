@@ -4,7 +4,7 @@ TCPサーバーから左右モーターのPWM値を直接取得して走行す�
 アプリケーションです。`line_trace_camera` とは独立しています。
 
 リポジトリルートから次のコマンドを実行すると、ビルドスクリプトがこのディレクトリを
-RasPike-ARTの `sdk/workspace/direct_pwm_camera` へシンボリックリンクし、
+RasPike-ARTの `sdk/workspace/direct_pwm_camera` へコピーし、workspace 内で
 `make app=direct_pwm_camera` を実行します。
 
 ```console

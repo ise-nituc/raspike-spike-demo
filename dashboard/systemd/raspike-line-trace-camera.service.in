@@ -2,7 +2,7 @@
 Description=Raspike line trace camera robot
 After=raspike-vision-server.service
 Requires=raspike-vision-server.service
-Conflicts=raspike-direct-pwm-camera.service
+Conflicts=raspike-direct-pwm-camera.service raspike-ocan2026.service
 
 [Service]
 Type=simple
