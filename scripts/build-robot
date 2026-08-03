@@ -59,4 +59,5 @@ else
 fi
 
 echo "[build-robot] building RasPike application: ${APP_NAME}"
-make -C "${SDK_WORKSPACE}" app="${APP_NAME}"
+cd "${SDK_WORKSPACE}"
+make img="${APP_NAME}"

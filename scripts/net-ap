@@ -13,4 +13,4 @@ echo
 echo "AP mode is active."
 echo "Connect from PC:"
 echo "  ssh iot@192.168.60.1"
-echo "  http://192.168.60.1:5000/"
+echo "  http://192.168.60.1:8082/"
