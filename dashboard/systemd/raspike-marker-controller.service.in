@@ -1,0 +1,15 @@
+[Unit]
+Description=Raspike marker controller
+After=network.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@REPO@/vision-server
+ExecStart=@REPO@/vision-server/.venv/bin/python @REPO@/vision-server/marker_controller.py
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

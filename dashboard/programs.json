@@ -1,0 +1,18 @@
+{
+  "programs": [
+    {
+      "id": "vision-server",
+      "category": "python",
+      "label": "画像認識サーバー",
+      "description": "カメラ画像から走行ラインを検出し、認識結果を配信します。",
+      "unit": "raspike-vision-server.service"
+    },
+    {
+      "id": "marker-controller",
+      "category": "python",
+      "label": "マーカー追従",
+      "description": "赤・緑のマーカーを検出する操作画面を配信します。",
+      "unit": "raspike-marker-controller.service"
+    }
+  ]
+}

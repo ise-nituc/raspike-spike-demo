@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "${REPO_DIR}/dashboard"
+
+if [[ ! -x .venv/bin/python ]]; then
+    echo "error: dashboard environment is missing" >&2
+    echo "create it with: python3 -m venv dashboard/.venv && dashboard/.venv/bin/pip install -r dashboard/requirements.txt" >&2
+    exit 1
+fi
+
+echo "Dashboard: http://$(hostname -I | awk '{print $1}'):5000/"
+exec .venv/bin/python app.py
