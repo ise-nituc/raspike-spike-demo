@@ -1,7 +1,7 @@
 {
   "dashboard": {
     "host": "0.0.0.0",
-    "web_port": 5000,
+    "web_port": 8082,
     "system_actions": ["reboot", "poweroff"]
   },
   "programs": [

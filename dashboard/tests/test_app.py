@@ -24,7 +24,7 @@ class DashboardTest(unittest.TestCase):
 
     def test_dashboard_port_comes_from_manifest(self):
         self.assertEqual(self.app.config["DASHBOARD_HOST"], "0.0.0.0")
-        self.assertEqual(self.app.config["DASHBOARD_PORT"], 5000)
+        self.assertEqual(self.app.config["DASHBOARD_PORT"], 8082)
 
     def token(self):
         self.client.get("/")
