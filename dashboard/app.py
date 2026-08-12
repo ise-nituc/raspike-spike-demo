@@ -33,6 +33,7 @@ class Program:
     description: str
     unit: str
     web_port: int | None = None
+    robot_app: str | None = None
 
 
 def load_programs(path: Path) -> dict[str, Program]:
@@ -46,6 +47,8 @@ def load_programs(path: Path) -> dict[str, Program]:
             raise ValueError(f"invalid or duplicate program: {program.id!r}")
         if program.web_port is not None and not 1 <= program.web_port <= 65535:
             raise ValueError(f"invalid web port for program: {program.id!r}")
+        if program.robot_app is not None and not re.fullmatch(r"[A-Za-z0-9_-]+", program.robot_app):
+            raise ValueError(f"invalid robot application for program: {program.id!r}")
         programs[program.id] = program
     if not programs:
         raise ValueError("the program manifest is empty")
@@ -71,12 +74,14 @@ def run_command(argv: list[str]) -> subprocess.CompletedProcess[str]:
 def create_app(
     manifest: Path | None = None,
     command_runner: Callable[[list[str]], subprocess.CompletedProcess[str]] = run_command,
+    state_dir: Path | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.secret_key = os.environ.get("RASPIKE_DASHBOARD_SECRET", secrets.token_hex(32))
     manifest_path = manifest or BASE_DIR / "programs.json"
     programs = load_programs(manifest_path)
     dashboard_host, dashboard_port, system_actions = load_dashboard_settings(manifest_path)
+    robot_state_dir = state_dir or BASE_DIR.parent / "var" / "run"
     app.config.update(DASHBOARD_HOST=dashboard_host, DASHBOARD_PORT=dashboard_port)
 
     def program_or_404(program_id: str) -> Program:
@@ -88,13 +93,39 @@ def create_app(
     def systemctl(*args: str) -> subprocess.CompletedProcess[str]:
         return command_runner(["sudo", "-n", "systemctl", *args])
 
+    def lifecycle_marker(program: Program) -> Path:
+        name = program.robot_app or program.id.replace("-", "_")
+        return robot_state_dir / f"robot-{name}.status"
+
+    def write_lifecycle(program: Program, lifecycle: str) -> None:
+        marker = lifecycle_marker(program)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        temporary = marker.with_name(f".{marker.name}.{os.getpid()}")
+        temporary.write_text(f"{lifecycle}\n", encoding="utf-8")
+        temporary.replace(marker)
+
     def state(program: Program) -> dict[str, str]:
         result = systemctl("show", program.unit, "--property=ActiveState,SubState", "--value")
         values = result.stdout.strip().splitlines()
         active, sub = (values + ["unknown", "unknown"])[:2]
         if result.returncode:
             active, sub = "unknown", "unknown"
-        return {"active_state": active, "sub_state": sub}
+        result_state = {"active_state": active, "sub_state": sub}
+        if program.category == "raspike-art":
+            lifecycle = "ready"
+            marker = lifecycle_marker(program)
+            try:
+                marker_state = marker.read_text(encoding="utf-8").strip()
+            except OSError:
+                marker_state = ""
+            if active == "failed":
+                lifecycle = "ready" if marker_state == "ready" else "error"
+            elif marker_state == "error":
+                lifecycle = "error"
+            elif active in {"active", "activating"}:
+                lifecycle = marker_state if marker_state in {"building", "ready", "running"} else "running"
+            result_state["lifecycle_state"] = lifecycle
+        return result_state
 
     def require_csrf() -> None:
         if not secrets.compare_digest(request.headers.get("X-CSRF-Token", ""), session.get("csrf", "-")):
@@ -132,6 +163,13 @@ def create_app(
         result = systemctl(action, program.unit)
         if result.returncode:
             return jsonify(error=(result.stderr.strip() or "systemctl failed")), 503
+        if program.category == "raspike-art":
+            if action == "stop":
+                write_lifecycle(program, "ready")
+            else:
+                for other in programs.values():
+                    if other.category == "raspike-art" and other.id != program.id:
+                        write_lifecycle(other, "ready")
         return jsonify(id=program.id, action=action, **state(program))
 
     @app.get("/api/programs/<program_id>/logs")

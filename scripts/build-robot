@@ -2,62 +2,107 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SDK_WORKSPACE="${HOME}/RasPike-ART/sdk/workspace"
+SDK_ROOT="${HOME}/RasPike-ART"
+SDK_WORKSPACE="${SDK_ROOT}/sdk/workspace"
 APP_NAME="${1:-appdir}"
+CACHE_DIR="${REPO_DIR}/var/cache/asp"
+LOCK_FILE="${REPO_DIR}/var/run/robot.lock"
+STATUS_FILE="${RASPIKE_STATUS_FILE:-}"
 
 if [[ ! "${APP_NAME}" =~ ^[A-Za-z0-9_-]+$ ]]; then
     echo "error: invalid application name: ${APP_NAME}" >&2
     exit 1
 fi
-
 if [ ! -d "${SDK_WORKSPACE}" ]; then
     echo "error: RasPike-ART workspace not found: ${SDK_WORKSPACE}" >&2
     exit 1
 fi
 
-if [ "${APP_NAME}" = "appdir" ]; then
-    # 従来構成ではSDK側のappdirをrobot/appdirから参照する。
-    ROBOT_APP_DIR="${REPO_DIR}/robot/appdir"
-    SDK_APP_DIR="${SDK_WORKSPACE}/appdir"
-
-    if [ ! -L "${ROBOT_APP_DIR}" ] || \
-       [ "$(readlink -f "${ROBOT_APP_DIR}")" != "$(readlink -f "${SDK_APP_DIR}")" ]; then
-        echo "error: ${ROBOT_APP_DIR} must be a symlink to ${SDK_APP_DIR}" >&2
-        exit 1
-    fi
-else
-    # Makefile.workspace はアプリのパスを workspace 基準で組み立てるため、
-    # workspace 外へのシンボリックリンクでは Makefile.inc の参照先がずれる。
-    # リポジトリ内のアプリを workspace へコピーしてからビルドする。
-    ROBOT_APP_DIR="${REPO_DIR}/robot/${APP_NAME}"
-    SDK_APP_DIR="${SDK_WORKSPACE}/${APP_NAME}"
-    SOURCE_MARKER="${SDK_APP_DIR}/.raspike-spike-demo-source"
-
-    if [ ! -d "${ROBOT_APP_DIR}" ]; then
-        echo "error: robot application not found: ${ROBOT_APP_DIR}" >&2
-        exit 1
-    fi
-
-    if [ -L "${SDK_APP_DIR}" ]; then
-        if [ "$(readlink -f "${SDK_APP_DIR}")" != "$(readlink -f "${ROBOT_APP_DIR}")" ]; then
-            echo "error: ${SDK_APP_DIR} already exists and does not point to ${ROBOT_APP_DIR}" >&2
-            exit 1
-        fi
-        rm "${SDK_APP_DIR}"
-    elif [ -e "${SDK_APP_DIR}" ]; then
-        if [ ! -f "${SOURCE_MARKER}" ] || [ "$(cat "${SOURCE_MARKER}")" != "${ROBOT_APP_DIR}" ]; then
-            echo "error: ${SDK_APP_DIR} already exists and is not managed by this script" >&2
-            exit 1
-        fi
-        rm -rf "${SDK_APP_DIR}"
-    fi
-
-    mkdir "${SDK_APP_DIR}"
-    cp -a "${ROBOT_APP_DIR}/." "${SDK_APP_DIR}/"
-    printf '%s\n' "${ROBOT_APP_DIR}" > "${SOURCE_MARKER}"
-    echo "[build-robot] copied ${ROBOT_APP_DIR} -> ${SDK_APP_DIR}"
+mkdir -p "${CACHE_DIR}" "$(dirname "${LOCK_FILE}")"
+if [ "${RASPIKE_ROBOT_LOCK_HELD:-0}" != 1 ]; then
+    exec 9>"${LOCK_FILE}"
+    flock 9
 fi
 
-echo "[build-robot] building RasPike application: ${APP_NAME}"
+write_status() {
+    [ -n "${STATUS_FILE}" ] || return 0
+    local temporary="${STATUS_FILE}.$$"
+    printf '%s\n' "$1" > "${temporary}"
+    mv "${temporary}" "${STATUS_FILE}"
+}
+
+if [ "${APP_NAME}" = "appdir" ]; then
+    echo "[build-robot] building the SDK workspace appdir"
+    cd "${SDK_WORKSPACE}"
+    make img="${APP_NAME}"
+    exit
+fi
+
+ROBOT_APP_DIR="${REPO_DIR}/robot/${APP_NAME}"
+if [ ! -d "${ROBOT_APP_DIR}" ]; then
+    echo "error: robot application not found: ${ROBOT_APP_DIR}" >&2
+    exit 1
+fi
+
+# Remove only directories created by the former copy-based implementation.
+LEGACY_APP_DIR="${SDK_WORKSPACE}/${APP_NAME}"
+LEGACY_MARKER="${LEGACY_APP_DIR}/.raspike-spike-demo-source"
+if [ -f "${LEGACY_MARKER}" ] && [ "$(cat "${LEGACY_MARKER}")" = "${ROBOT_APP_DIR}" ]; then
+    rm -rf "${LEGACY_APP_DIR}"
+    echo "[build-robot] removed legacy workspace copy: ${LEGACY_APP_DIR}"
+fi
+
+hash_git_tree() {
+    local root="$1" file
+    git -C "${root}" ls-files --cached --others --exclude-standard -z |
+        LC_ALL=C sort -z |
+        while IFS= read -r -d '' file; do
+            case "${root}/${file}" in
+                "${SDK_WORKSPACE}"/*) continue ;;
+            esac
+            if [ -f "${root}/${file}" ]; then
+                printf '%s\0' "${file}"
+                sha256sum "${root}/${file}"
+            fi
+        done
+}
+
+SOURCE_HASH="$(
+    find "${ROBOT_APP_DIR}" -type f -print0 |
+        LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1
+)"
+SDK_HASH="$(
+    {
+        hash_git_tree "${SDK_ROOT}"
+        if [ -d "${SDK_ROOT}/libraspike-art/.git" ] || [ -f "${SDK_ROOT}/libraspike-art/.git" ]; then
+            hash_git_tree "${SDK_ROOT}/libraspike-art"
+        fi
+        git -C "${SDK_ROOT}" submodule status --recursive
+        printf '%s\n' 'raspike-asp-cache-v1'
+    } | sha256sum | cut -d' ' -f1
+)"
+CACHE_KEY="$(printf '%s\n%s\n' "${SOURCE_HASH}" "${SDK_HASH}" | sha256sum | cut -d' ' -f1)"
+CACHE_ENTRY="${CACHE_DIR}/${CACHE_KEY}"
+
+if [ -x "${CACHE_ENTRY}/asp" ]; then
+    cp "${CACHE_ENTRY}/asp" "${SDK_WORKSPACE}/asp"
+    printf '%s\n' "${ROBOT_APP_DIR}" > "${SDK_WORKSPACE}/appdir"
+    echo "[build-robot] cache hit: ${CACHE_KEY}"
+    exit
+fi
+
+APP_RELATIVE="$(realpath --relative-to="${SDK_WORKSPACE}" "${ROBOT_APP_DIR}")"
+write_status building
+echo "[build-robot] cache miss: ${CACHE_KEY}"
+echo "[build-robot] building directly from ${APP_RELATIVE}"
 cd "${SDK_WORKSPACE}"
-make img="${APP_NAME}"
+make "img=${APP_RELATIVE}"
+
+TEMP_ENTRY="${CACHE_DIR}/.${CACHE_KEY}.$$"
+mkdir "${TEMP_ENTRY}"
+cp asp "${TEMP_ENTRY}/asp"
+chmod +x "${TEMP_ENTRY}/asp"
+printf 'application=%s\nsource_hash=%s\nsdk_hash=%s\n' \
+    "${APP_NAME}" "${SOURCE_HASH}" "${SDK_HASH}" > "${TEMP_ENTRY}/metadata"
+mv "${TEMP_ENTRY}" "${CACHE_ENTRY}"
+echo "[build-robot] cached: ${CACHE_KEY}"
