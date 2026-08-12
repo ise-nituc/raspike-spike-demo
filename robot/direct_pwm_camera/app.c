@@ -7,6 +7,7 @@
 
 static const pbio_port_id_t left_motor_port = PBIO_PORT_ID_B;
 static const pbio_port_id_t right_motor_port = PBIO_PORT_ID_A;
+static const pbio_port_id_t color_sensor_port = PBIO_PORT_ID_E;
 static const pbio_port_id_t force_sensor_port = PBIO_PORT_ID_D;
 
 static void wait_force_sensor_pressed(pup_device_t *force_sensor)
@@ -34,7 +35,8 @@ void main_task(intptr_t unused)
     printf("+---------------------------------+\n");
 
     force_sensor = pup_force_sensor_get_device(force_sensor_port);
-    DirectPwmController_Configure(left_motor_port, right_motor_port);
+    DirectPwmController_Configure(
+        left_motor_port, right_motor_port, color_sensor_port);
     DirectPwmController_ConnectServer();
 
     DirectPwmController_Pause();
