@@ -5,10 +5,20 @@ new two-digit robot ID:
 
 ```bash
 cd ~/raspike-spike-demo
+git switch main
 git pull
 cd scripts
 ./setup 02
 sudo reboot
+```
+
+For normal updates from the public repository, an HTTPS `origin` is recommended.
+It does not need to be reset on every update. If `git pull` fails with
+`git@github.com: Permission denied (publickey)`, inspect and change the remote:
+
+```bash
+git remote -v
+git remote set-url origin https://github.com/ise-nituc/raspike-spike-demo.git
 ```
 
 `setup` accepts IDs from `01` through `99`. It previews all derived addresses
@@ -42,6 +52,6 @@ delete legacy `netplan-eth0`, `Wired connection 1`, or anything under
 reboot without risking unrelated or secret connection data.
 
 As in the previous `/home/iot/setup`, completion output also includes the
-port-5000 web UI addresses, current runtime interface information, host-key
+port-8082 dashboard addresses, current runtime interface information, host-key
 cleanup commands after clone identity regeneration, and an optional reboot
 prompt.
