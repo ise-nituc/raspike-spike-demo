@@ -153,12 +153,12 @@ Setup complete. Reboot to activate the saved network settings.
 
 Wired:
 ssh iot@${ETH_IP%/*}
-http://${ETH_IP%/*}:5000/
+http://${ETH_IP%/*}:8082/
 
 Access Point:
 SSID: $AP_SSID
 ssh iot@${AP_IP%/*}
-http://${AP_IP%/*}:5000/
+http://${AP_IP%/*}:8082/
 EOF
 
 echo
@@ -172,6 +172,7 @@ if [[ "$CLONE_CHANGE" == true ]]; then
 
 SSH host keys were regenerated. If a client reports a host-key conflict, run:
   ssh-keygen -R ${ETH_IP%/*}
+  ssh-keygen -R ${AP_IP%/*}
   ssh-keygen -R $HOSTNAME_NEW
   ssh-keygen -R ${HOSTNAME_NEW}.local
 EOF
