@@ -85,6 +85,9 @@ latest_frame = None
 latest_command = None
 latest_marker_found = False
 latest_processing_ms = 0.0
+latest_control_enabled = None
+latest_black_stop = None
+latest_robot_status_time = 0.0
 state_lock = threading.Lock()
 
 app = Flask(__name__)
@@ -406,7 +409,18 @@ def handle_tcp_client(conn, addr):
                 request_line, receive_buffer = receive_buffer.split(b"\n", 1)
                 request = request_line.decode(errors="ignore").strip()
 
-                if request == "GET":
+                parts = request.split()
+                if len(parts) == 3 and parts[0] == "GET" and parts[1] in {"0", "1"} and parts[2] in {"0", "1"}:
+                    global latest_control_enabled
+                    global latest_black_stop
+                    global latest_robot_status_time
+                    with state_lock:
+                        latest_control_enabled = parts[1] == "1"
+                        latest_black_stop = parts[2] == "1"
+                        latest_robot_status_time = time.monotonic()
+                    response = get_latest_motor_command_text()
+                elif request == "GET":
+                    # 旧クライアントとの互換性を維持する。
                     response = get_latest_motor_command_text()
                 else:
                     response = "ERROR unknown command\n"
@@ -655,6 +669,11 @@ def index():
     .status-card.direction { background: var(--blue-soft); }
     .status-card.speed { background: var(--orange-soft); }
     .status-card.motion { grid-column: 1 / -1; min-height: 112px; }
+    .status-card.control { background: #edf0ee; }
+    .status-card.control.enabled { background: var(--green-soft); }
+    .status-card.safety { background: #edf0ee; }
+    .status-card.safety.active { background: #fbe2df; }
+    .status-card.safety.active .card-value { color: #a83a32; }
     .card-label { margin: 0 0 10px; color: var(--muted); font-size: .83rem; font-weight: 800; }
     .card-value { margin: 0; font-size: clamp(1.35rem, 2.5vw, 2rem); font-weight: 900; line-height: 1.2; }
     .detect .card-value { color: #19784c; }
@@ -706,6 +725,8 @@ def index():
         <article id="direction-card" class="status-card direction"><span id="direction-icon" class="icon" aria-hidden="true">↑</span><p class="card-label">すすむ向き</p><p id="direction" class="card-value">—</p></article>
         <article id="speed-card" class="status-card speed"><span class="icon" aria-hidden="true">⚡</span><p class="card-label">スピード</p><p id="speed" class="card-value">—</p></article>
         <article id="motion-card" class="status-card motion"><span id="motion-icon" class="icon" aria-hidden="true">■</span><p class="card-label">ロボット</p><p id="motion" class="card-value">ストップ！</p><p id="motion-note" class="card-note">ぬいぐるみを待っています</p></article>
+        <article id="control-card" class="status-card control"><span id="control-icon" class="icon" aria-hidden="true">—</span><p class="card-label">フォースセンサ</p><p id="control" class="card-value">状態不明</p><p id="control-note" class="card-note">ロボットからの通信を待っています</p></article>
+        <article id="safety-card" class="status-card safety"><span id="safety-icon" class="icon" aria-hidden="true">—</span><p class="card-label">黒線ストップ</p><p id="safety" class="card-value">状態不明</p><p id="safety-note" class="card-note">ロボットからの通信を待っています</p></article>
       </div>
     </section>
 
@@ -723,6 +744,8 @@ def index():
           <div class="datum"><dt>strength</dt><dd id="raw-strength">—</dd></div>
           <div class="datum"><dt>theta_deg</dt><dd id="raw-theta">—</dd></div>
           <div class="datum"><dt>processing_ms</dt><dd id="raw-processing">—</dd></div>
+          <div class="datum"><dt>control_enabled</dt><dd id="raw-control">—</dd></div>
+          <div class="datum"><dt>black_stop</dt><dd id="raw-black-stop">—</dd></div>
         </dl>
         <p class="debug-note">左右のPWMはモーターへの指令値、strengthは操作の強さ、theta_degはマーカーの向き、processing_msは画像1枚の解析時間です。</p>
       </div>
@@ -751,7 +774,10 @@ def index():
           const data = await response.json();
           const found = data.marker_found === true;
           const left = Number(data.left_pwm) || 0, right = Number(data.right_pwm) || 0;
-          const moving = Math.max(Math.abs(left), Math.abs(right)) > 1;
+          const robotFresh = data.robot_status_fresh === true;
+          const controlEnabled = robotFresh && data.control_enabled === true;
+          const blackStop = robotFresh && data.black_stop === true;
+          const moving = Math.max(Math.abs(left), Math.abs(right)) > 1 && controlEnabled && !blackStop;
           const strength = Math.max(0, Number(data.strength) || 0);
           const [directionText, directionIcon] = direction(Number(data.theta_deg) || 0);
 
@@ -763,10 +789,21 @@ def index():
           $('motion-note').textContent = moving ? 'ぬいぐるみといっしょに動いています' : found ? 'まんなかでひとやすみ' : 'ぬいぐるみを待っています';
           $('motion-icon').textContent = moving ? '▶' : '■';
 
+          setCard('control', robotFresh ? (controlEnabled ? '追従 ON' : '追従 OFF') : '状態不明');
+          $('control-note').textContent = robotFresh ? (controlEnabled ? 'マーカーに従って走行できます' : 'フォースセンサで停止中です') : 'ロボットからの通信を待っています';
+          $('control-icon').textContent = robotFresh ? (controlEnabled ? '▶' : '■') : '—';
+          $('control-card').classList.toggle('enabled', controlEnabled);
+          setCard('safety', robotFresh ? (blackStop ? '作動中！' : '解除') : '状態不明');
+          $('safety-note').textContent = robotFresh ? (blackStop ? '黒線を検知して停止しています' : '黒線は検知していません') : 'ロボットからの通信を待っています';
+          $('safety-icon').textContent = robotFresh ? (blackStop ? '●' : '○') : '—';
+          $('safety-card').classList.toggle('active', blackStop);
+
           $('raw-marker').textContent = String(data.marker_found);
           $('raw-left').textContent = String(data.left_pwm); $('raw-right').textContent = String(data.right_pwm);
           $('raw-strength').textContent = number(data.strength, 3); $('raw-theta').textContent = number(data.theta_deg, 1);
           $('raw-processing').textContent = number(data.processing_ms, 1) + (Number.isFinite(Number(data.processing_ms)) ? ' ms' : '');
+          $('raw-control').textContent = robotFresh ? String(data.control_enabled) : '—';
+          $('raw-black-stop').textContent = robotFresh ? String(data.black_stop) : '—';
           $('connection').classList.remove('offline'); $('connection').lastElementChild.textContent = 'つながっています';
           previous = data;
         } catch (error) {
@@ -787,6 +824,11 @@ def status():
         cmd = latest_command
         marker_found = latest_marker_found
         processing_ms = latest_processing_ms
+        control_enabled = latest_control_enabled
+        black_stop = latest_black_stop
+        robot_status_time = latest_robot_status_time
+
+    robot_status_fresh = time.monotonic() - robot_status_time <= 1.0
 
     return jsonify({
         "marker_found": marker_found,
@@ -795,6 +837,9 @@ def status():
         "strength": 0.0 if cmd is None else cmd.strength,
         "theta_deg": 0.0 if cmd is None else cmd.theta_deg,
         "processing_ms": processing_ms,
+        "control_enabled": control_enabled if robot_status_fresh else None,
+        "black_stop": black_stop if robot_status_fresh else None,
+        "robot_status_fresh": robot_status_fresh,
     })
 
 

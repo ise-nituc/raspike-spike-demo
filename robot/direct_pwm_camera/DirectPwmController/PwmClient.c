@@ -102,8 +102,13 @@ void PwmClient_Close(void)
     }
 }
 
-bool PwmClient_Get(int *left_pwm, int *right_pwm)
+bool PwmClient_Get(
+    int *left_pwm,
+    int *right_pwm,
+    bool control_enabled,
+    bool black_stop)
 {
+    char request[32];
     char response[RESPONSE_BUFFER_SIZE];
     int left;
     int right;
@@ -113,7 +118,15 @@ bool PwmClient_Get(int *left_pwm, int *right_pwm)
         return false;
     }
 
-    if (!send_all("GET\n", 4)) {
+    int request_length = snprintf(
+        request,
+        sizeof(request),
+        "GET %d %d\n",
+        control_enabled ? 1 : 0,
+        black_stop ? 1 : 0);
+
+    if (request_length < 0 || (size_t)request_length >= sizeof(request)
+        || !send_all(request, (size_t)request_length)) {
         printf("PwmClient: send failed\n");
         PwmClient_Close();
         return false;
