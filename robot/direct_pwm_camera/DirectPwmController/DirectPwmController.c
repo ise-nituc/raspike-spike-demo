@@ -24,6 +24,8 @@ static pup_motor_t *fg_left_motor = NULL;
 static pup_motor_t *fg_right_motor = NULL;
 static pup_device_t *fg_color_sensor = NULL;
 static bool fg_server_connected = false;
+static int fg_applied_left_pwm = 0;
+static int fg_applied_right_pwm = 0;
 
 static int clamp_motor_power(int power)
 {
@@ -38,6 +40,8 @@ static int clamp_motor_power(int power)
 
 static void stop_motors(void)
 {
+    fg_applied_left_pwm = 0;
+    fg_applied_right_pwm = 0;
     if (fg_left_motor != NULL) {
         pup_motor_stop(fg_left_motor);
     }
@@ -93,7 +97,8 @@ void direct_pwm_task(intptr_t unused)
     }
 
     if (!fg_server_connected || !PwmClient_Get(
-            &left_pwm, &right_pwm, !fg_paused, black_stop)) {
+            &left_pwm, &right_pwm, !fg_paused, black_stop,
+            fg_applied_left_pwm, fg_applied_right_pwm)) {
         fg_server_connected = false;
         stop_motors();
         ext_tsk();
@@ -110,6 +115,8 @@ void direct_pwm_task(intptr_t unused)
     right_pwm = clamp_motor_power(right_pwm);
     pup_motor_set_power(fg_left_motor, left_pwm);
     pup_motor_set_power(fg_right_motor, right_pwm);
+    fg_applied_left_pwm = left_pwm;
+    fg_applied_right_pwm = right_pwm;
 
     ext_tsk();
 }

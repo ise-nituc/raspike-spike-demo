@@ -106,7 +106,9 @@ bool PwmClient_Get(
     int *left_pwm,
     int *right_pwm,
     bool control_enabled,
-    bool black_stop)
+    bool black_stop,
+    int applied_left_pwm,
+    int applied_right_pwm)
 {
     char request[32];
     char response[RESPONSE_BUFFER_SIZE];
@@ -121,9 +123,11 @@ bool PwmClient_Get(
     int request_length = snprintf(
         request,
         sizeof(request),
-        "GET %d %d\n",
+        "GET %d %d %d %d\n",
         control_enabled ? 1 : 0,
-        black_stop ? 1 : 0);
+        black_stop ? 1 : 0,
+        applied_left_pwm,
+        applied_right_pwm);
 
     if (request_length < 0 || (size_t)request_length >= sizeof(request)
         || !send_all(request, (size_t)request_length)) {

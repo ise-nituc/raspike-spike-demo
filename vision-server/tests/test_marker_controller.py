@@ -1,5 +1,7 @@
 import importlib.util
+import socket
 import sys
+import threading
 import types
 from pathlib import Path
 
@@ -101,3 +103,51 @@ def test_settings_endpoint_rejects_invalid_speed_gain():
     response = client.post("/settings", json={"speed_gain": "fast"})
 
     assert response.status_code == 400
+
+
+def test_deadzone_can_be_reduced_for_small_movements():
+    target = marker(
+        marker_controller.WIDTH / 2,
+        marker_controller.HEIGHT / 2
+        - marker_controller.ACTIVE_RADIUS * 0.08,
+        0.0,
+    )
+
+    wide = marker_controller.calculate_motor_command(target, deadzone=0.15)
+    narrow = marker_controller.calculate_motor_command(target, deadzone=0.02)
+
+    assert wide.left_pwm == wide.right_pwm == 0
+    assert narrow.left_pwm == narrow.right_pwm > 0
+
+
+def test_settings_endpoint_updates_deadzone(monkeypatch):
+    monkeypatch.setattr(
+        marker_controller,
+        "latest_deadzone",
+        marker_controller.DEADZONE_DEFAULT,
+    )
+    client = marker_controller.app.test_client()
+
+    response = client.post("/settings", json={"deadzone": 0.02})
+
+    assert response.status_code == 200
+    assert response.get_json()["deadzone"] == 0.02
+    assert marker_controller.latest_deadzone == 0.02
+
+
+def test_robot_reports_pwm_applied_by_motor_api(monkeypatch):
+    monkeypatch.setattr(marker_controller, "latest_command", marker_controller.stop_command())
+    server, client = socket.socketpair()
+    thread = threading.Thread(
+        target=marker_controller.handle_tcp_client,
+        args=(server, ("local", 0)),
+    )
+    thread.start()
+
+    client.sendall(b"GET 1 0 72 68\n")
+    assert client.recv(32) == b"0:0\n"
+    client.close()
+    thread.join(timeout=1)
+
+    assert marker_controller.latest_robot_left_pwm == 72
+    assert marker_controller.latest_robot_right_pwm == 68

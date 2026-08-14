@@ -31,7 +31,7 @@ RasPike-ARTの `make start` はworkspaceにある現在の `asp` を起動する
 ## TCPプロトコル
 
 - 接続先: `127.0.0.1:65432`
-- クライアント要求: `GET <control_enabled> <black_stop>\n`
+- クライアント要求: `GET <control_enabled> <black_stop> <applied_left> <applied_right>\n`
 - サーバー応答: `<left>:<right>\n`
 - 値の範囲: `-100`～`100`
 
@@ -41,8 +41,11 @@ RasPike-ARTの `make start` はworkspaceにある現在の `asp` を起動する
 黒が解除されると、次の周期からサーバーの制御値に従って走行を再開します。
 フォースセンサーによる制御ON/OFFと黒線停止の状態は、PWM要求と一緒にサーバーへ通知され、
 マーカー追従Web画面に表示されます。
-`marker_controller.py` が返す値は現在
-`-50`～`50` ですが、同じプロトコルで `-100`～`100` を返す別サーバーも利用できます。
+直前の制御周期でモーターAPIへ設定した左右PWMも通知されるため、Web画面でPython側の
+計算PWMが走行体まで届いたか確認できます（エンコーダーによる実回転の検出ではありません）。
+この拡張値を表示するには、変更後の `direct_pwm_camera` を再ビルドして走行体を再起動して
+ください。旧バイナリとの通信自体は継続できますが、「ロボット適用PWM」は通信待ち表示になります。
+`marker_controller.py` が返す値も現在は `-100`～`100` です。
 
 ## 操作
 

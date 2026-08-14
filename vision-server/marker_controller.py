@@ -39,19 +39,21 @@ WIDTH = 320
 HEIGHT = 240
 
 # モータ出力設定
-PWM_MAX = 50
+PWM_MAX = 100
 
 # Web画面から調整するモータ出力倍率。計算値は最終的に PWM_MAX で制限する。
 SPEED_GAIN_DEFAULT = float(os.environ.get("RASPIKE_SPEED_GAIN", "1.5"))
 SPEED_GAIN_MIN = 0.5
-SPEED_GAIN_MAX = 3.0
+SPEED_GAIN_MAX = 6.0
 
 # 操作領域設定
 # 画像中心からこの距離まで離すと最大操作量になる
 ACTIVE_RADIUS = min(WIDTH, HEIGHT) * 0.40
 
 # 中心付近の停止領域
-DEADZONE = 0.15
+DEADZONE_DEFAULT = float(os.environ.get("RASPIKE_DEADZONE", "0.05"))
+DEADZONE_MIN = 0.0
+DEADZONE_MAX = 0.30
 
 # 正面付近では意図しない旋回を抑える（sin(theta) に対する比率）
 TURN_DEADZONE = 0.10
@@ -90,6 +92,9 @@ latest_control_enabled = None
 latest_black_stop = None
 latest_robot_status_time = 0.0
 latest_speed_gain = max(SPEED_GAIN_MIN, min(SPEED_GAIN_DEFAULT, SPEED_GAIN_MAX))
+latest_deadzone = max(DEADZONE_MIN, min(DEADZONE_DEFAULT, DEADZONE_MAX))
+latest_robot_left_pwm = None
+latest_robot_right_pwm = None
 state_lock = threading.Lock()
 
 app = Flask(__name__)
@@ -301,7 +306,9 @@ def detect_marker(frame_bgr):
 # モータ指令計算
 # ============================================================
 
-def calculate_motor_command(marker, speed_gain=SPEED_GAIN_DEFAULT):
+def calculate_motor_command(
+    marker, speed_gain=SPEED_GAIN_DEFAULT, deadzone=DEADZONE_DEFAULT
+):
     """
     マーカー状態から left_pwm / right_pwm を計算する。
     """
@@ -315,7 +322,7 @@ def calculate_motor_command(marker, speed_gain=SPEED_GAIN_DEFAULT):
     # 前進・後退はマーカー中心の前後位置だけで決める。横へずらしても
     # 速度が上がらないため、ぬいぐるみをカメラへ厳密に合わせる必要がない。
     forward_ratio = clip(dy / ACTIVE_RADIUS, -1.0, 1.0)
-    forward = apply_deadzone(forward_ratio, DEADZONE)
+    forward = apply_deadzone(forward_ratio, deadzone)
     forward = math.copysign(abs(forward) ** GAMMA, forward) if forward else 0.0
 
     # 旋回は赤→緑の向きだけで決める。中心位置に関係なく、ぬいぐるみを
@@ -420,13 +427,28 @@ def handle_tcp_client(conn, addr):
                 request = request_line.decode(errors="ignore").strip()
 
                 parts = request.split()
-                if len(parts) == 3 and parts[0] == "GET" and parts[1] in {"0", "1"} and parts[2] in {"0", "1"}:
+                if (
+                    len(parts) in {3, 5}
+                    and parts[0] == "GET"
+                    and parts[1] in {"0", "1"}
+                    and parts[2] in {"0", "1"}
+                ):
                     global latest_control_enabled
                     global latest_black_stop
                     global latest_robot_status_time
+                    global latest_robot_left_pwm
+                    global latest_robot_right_pwm
                     with state_lock:
                         latest_control_enabled = parts[1] == "1"
                         latest_black_stop = parts[2] == "1"
+                        if len(parts) == 5:
+                            try:
+                                latest_robot_left_pwm = int(parts[3])
+                                latest_robot_right_pwm = int(parts[4])
+                            except ValueError:
+                                response = "ERROR invalid motor status\n"
+                                conn.sendall(response.encode())
+                                continue
                         latest_robot_status_time = time.monotonic()
                     response = get_latest_motor_command_text()
                 elif request == "GET":
@@ -460,23 +482,21 @@ def tcp_server_loop():
 # 描画
 # ============================================================
 
-def draw_debug_view(frame_bgr, marker, cmd, processing_ms):
+def draw_debug_view(frame_bgr, marker, cmd, processing_ms, deadzone=DEADZONE_DEFAULT):
     view = frame_bgr.copy()
 
     image_cx = int(WIDTH / 2)
     image_cy = int(HEIGHT / 2)
 
-    # 画像中心と有効半径
-    cv2.circle(view, (image_cx, image_cy), 4, (255, 0, 0), -1)
-    cv2.circle(view, (image_cx, image_cy), int(ACTIVE_RADIUS), (255, 0, 0), 1)
-
-    # デッドゾーン
+    # 画像中心とデッドゾーン。以前の大きな有効半径の円は停止範囲との
+    # 誤解を招くため表示せず、青い円を実際の停止範囲だけにする。
+    cv2.circle(view, (image_cx, image_cy), 3, (255, 255, 255), -1)
     cv2.circle(
         view,
         (image_cx, image_cy),
-        int(ACTIVE_RADIUS * DEADZONE),
-        (100, 100, 255),
-        1
+        int(ACTIVE_RADIUS * deadzone),
+        (255, 0, 0),
+        2
     )
 
     if marker is None:
@@ -611,10 +631,12 @@ def vision_loop():
 
             marker, red_mask, green_mask = detect_marker(frame_bgr)
 
+            with state_lock:
+                speed_gain = latest_speed_gain
+                deadzone = latest_deadzone
+
             if marker is not None:
-                with state_lock:
-                    speed_gain = latest_speed_gain
-                cmd = calculate_motor_command(marker, speed_gain)
+                cmd = calculate_motor_command(marker, speed_gain, deadzone)
             else:
                 # どちらかのマーカーを見失ったら、直前値を保持せず即停止する。
                 cmd = stop_command()
@@ -623,7 +645,9 @@ def vision_loop():
 
             processing_ms = (time.perf_counter() - loop_t0) * 1000.0
             privacy_frame = make_marker_only_frame(frame_bgr, marker)
-            view = draw_debug_view(privacy_frame, marker, cmd, processing_ms)
+            view = draw_debug_view(
+                privacy_frame, marker, cmd, processing_ms, deadzone
+            )
 
             with state_lock:
                 latest_frame = view
@@ -751,9 +775,13 @@ def index():
         <article id="safety-card" class="status-card safety"><span id="safety-icon" class="icon" aria-hidden="true">—</span><p class="card-label">黒線ストップ</p><p id="safety" class="card-value">状態不明</p><p id="safety-note" class="card-note">ロボットからの通信を待っています</p></article>
         <section class="status-card tuning" aria-labelledby="gain-title">
           <div class="tuning-head"><h2 id="gain-title" class="tuning-title">モータ感度</h2><output id="gain-value" class="gain-value" for="gain">1.50 倍</output></div>
-          <input id="gain" class="gain-slider" type="range" min="0.5" max="3.0" step="0.1" value="1.5" aria-describedby="gain-note">
+          <input id="gain" class="gain-slider" type="range" min="0.5" max="6.0" step="0.1" value="1.5" aria-describedby="gain-note">
           <p id="gain-note" class="card-note">大きくすると、同じぬいぐるみ操作でもモータ指令が強くなります。</p>
+          <div class="tuning-head"><label for="deadzone" class="tuning-title">中央の停止範囲</label><output id="deadzone-value" class="gain-value" for="deadzone">5%</output></div>
+          <input id="deadzone" class="gain-slider" type="range" min="0" max="0.30" step="0.01" value="0.05">
+          <p class="card-note">小さくすると、中央から少し動かしただけで前進・後退します。</p>
           <p id="pwm-readout" class="pwm-readout">計算PWM: L=0 / R=0</p>
+          <p id="robot-pwm-readout" class="pwm-readout">ロボット適用PWM: 通信待ち</p>
           <p class="card-note">※ 計算した指令値です。モータが実際に回転したことを検知する表示ではありません。</p>
         </section>
       </div>
@@ -784,7 +812,7 @@ def index():
     (() => {
       const $ = id => document.getElementById(id);
       let previous = {};
-      let gainEditing = false, gainTimer;
+      let settingsEditing = false, settingsTimer;
       const setCard = (id, value) => {
         const el = $(id); if (el.textContent === value) return;
         el.textContent = value; const card = $(id + '-card');
@@ -808,7 +836,7 @@ def index():
           const controlEnabled = robotFresh && data.control_enabled === true;
           const blackStop = robotFresh && data.black_stop === true;
           const moving = Math.max(Math.abs(left), Math.abs(right)) > 1 && controlEnabled && !blackStop;
-          const strength = Math.abs(Number(data.forward) || 0);
+          const strength = Math.max(Math.abs(left), Math.abs(right)) / (Number(data.pwm_max) || 100);
           const [directionText, directionIcon] = direction(Number(data.theta_deg) || 0);
 
           setCard('detect', found ? 'みつけたよ！' : 'さがしています…');
@@ -835,9 +863,14 @@ def index():
           $('raw-control').textContent = robotFresh ? String(data.control_enabled) : '—';
           $('raw-black-stop').textContent = robotFresh ? String(data.black_stop) : '—';
           $('pwm-readout').textContent = `計算PWM: L=${left} / R=${right}`;
-          if (!gainEditing) {
+          const robotLeft = Number(data.robot_left_pwm), robotRight = Number(data.robot_right_pwm);
+          $('robot-pwm-readout').textContent = robotFresh && Number.isFinite(robotLeft) && Number.isFinite(robotRight)
+            ? `ロボット適用PWM: L=${robotLeft} / R=${robotRight}` : 'ロボット適用PWM: 通信待ち';
+          if (!settingsEditing) {
             $('gain').value = Number(data.speed_gain).toFixed(1);
             $('gain-value').textContent = Number(data.speed_gain).toFixed(2) + ' 倍';
+            $('deadzone').value = Number(data.deadzone).toFixed(2);
+            $('deadzone-value').textContent = Math.round(Number(data.deadzone) * 100) + '%';
           }
           $('connection').classList.remove('offline'); $('connection').lastElementChild.textContent = 'つながっています';
           previous = data;
@@ -845,21 +878,24 @@ def index():
           $('connection').classList.add('offline'); $('connection').lastElementChild.textContent = 'つなぎ直しています…';
         }
       }
-      const saveGain = async () => {
-        const value = Number($('gain').value);
-        $('gain-value').textContent = value.toFixed(2) + ' 倍';
-        clearTimeout(gainTimer);
-        gainTimer = setTimeout(async () => {
+      const saveSettings = async () => {
+        const gain = Number($('gain').value), deadzone = Number($('deadzone').value);
+        $('gain-value').textContent = gain.toFixed(2) + ' 倍';
+        $('deadzone-value').textContent = Math.round(deadzone * 100) + '%';
+        clearTimeout(settingsTimer);
+        settingsTimer = setTimeout(async () => {
           try {
             const response = await fetch('/settings', {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ speed_gain: value })
+              body: JSON.stringify({ speed_gain: gain, deadzone })
             });
             if (!response.ok) throw new Error(response.status);
-          } finally { gainEditing = false; }
+          } finally { settingsEditing = false; }
         }, 180);
       };
-      $('gain').addEventListener('input', () => { gainEditing = true; saveGain(); });
+      for (const id of ['gain', 'deadzone']) {
+        $(id).addEventListener('input', () => { settingsEditing = true; saveSettings(); });
+      }
       update(); setInterval(update, 600);
     })();
   </script>
@@ -878,6 +914,9 @@ def status():
         black_stop = latest_black_stop
         robot_status_time = latest_robot_status_time
         speed_gain = latest_speed_gain
+        deadzone = latest_deadzone
+        robot_left_pwm = latest_robot_left_pwm
+        robot_right_pwm = latest_robot_right_pwm
 
     robot_status_fresh = time.monotonic() - robot_status_time <= 1.0
 
@@ -894,6 +933,10 @@ def status():
         "black_stop": black_stop if robot_status_fresh else None,
         "robot_status_fresh": robot_status_fresh,
         "speed_gain": speed_gain,
+        "pwm_max": PWM_MAX,
+        "deadzone": deadzone,
+        "robot_left_pwm": robot_left_pwm if robot_status_fresh else None,
+        "robot_right_pwm": robot_right_pwm if robot_status_fresh else None,
     })
 
 
@@ -901,19 +944,35 @@ def status():
 def settings():
     """Web画面からモータ出力倍率を安全な範囲で更新する。"""
     payload = request.get_json(silent=True) or {}
-    try:
-        speed_gain = float(payload["speed_gain"])
-    except (KeyError, TypeError, ValueError):
-        return jsonify({"error": "speed_gain must be a number"}), 400
+    if not ({"speed_gain", "deadzone"} & payload.keys()):
+        return jsonify({"error": "no supported setting supplied"}), 400
 
-    if not math.isfinite(speed_gain):
-        return jsonify({"error": "speed_gain must be finite"}), 400
+    def validated_number(name, current, low, high):
+        if name not in payload:
+            return current
+        try:
+            value = float(payload[name])
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} must be a number")
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite")
+        return clip(value, low, high)
 
-    speed_gain = clip(speed_gain, SPEED_GAIN_MIN, SPEED_GAIN_MAX)
     global latest_speed_gain
+    global latest_deadzone
     with state_lock:
+        try:
+            speed_gain = validated_number(
+                "speed_gain", latest_speed_gain, SPEED_GAIN_MIN, SPEED_GAIN_MAX
+            )
+            deadzone = validated_number(
+                "deadzone", latest_deadzone, DEADZONE_MIN, DEADZONE_MAX
+            )
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 400
         latest_speed_gain = speed_gain
-    return jsonify({"speed_gain": speed_gain})
+        latest_deadzone = deadzone
+    return jsonify({"speed_gain": speed_gain, "deadzone": deadzone})
 
 
 def generate_mjpeg():

@@ -11,6 +11,8 @@ bool PwmClient_Get(
     int *left_pwm,
     int *right_pwm,
     bool control_enabled,
-    bool black_stop);
+    bool black_stop,
+    int applied_left_pwm,
+    int applied_right_pwm);
 
 #endif
