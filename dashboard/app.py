@@ -23,6 +23,7 @@ from werkzeug.exceptions import HTTPException
 BASE_DIR = Path(__file__).resolve().parent
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 UNIT_RE = re.compile(r"^raspike-[a-z0-9-]+\.service$")
+THROTTLED_RE = re.compile(r"^throttled=0x([0-9a-fA-F]+)$")
 
 
 @dataclass(frozen=True)
@@ -190,6 +191,16 @@ def create_app(
         except (OSError, ValueError):
             pass
         disk = os.statvfs(BASE_DIR)
+        try:
+            throttled = command_runner(["vcgencmd", "get_throttled"])
+        except (OSError, subprocess.SubprocessError):
+            throttled = None
+        match = (
+            THROTTLED_RE.fullmatch(throttled.stdout.strip())
+            if throttled is not None and not throttled.returncode
+            else None
+        )
+        throttled_bits = int(match.group(1), 16) if match else None
         return jsonify(
             hostname=socket.gethostname(),
             ip=os.environ.get("RASPIKE_DASHBOARD_IP", request.host.split(":", 1)[0]),
@@ -197,6 +208,8 @@ def create_app(
             temperature_c=temperature,
             disk_free_bytes=disk.f_bavail * disk.f_frsize,
             uptime_seconds=time.monotonic(),
+            throttled_bits=throttled_bits,
+            under_voltage=bool(throttled_bits & 1) if throttled_bits is not None else None,
         )
 
     @app.post("/api/system/<action>")
