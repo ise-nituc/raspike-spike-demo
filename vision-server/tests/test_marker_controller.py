@@ -147,9 +147,41 @@ def test_robot_reports_pwm_applied_by_motor_api(monkeypatch):
     thread.start()
 
     client.sendall(b"GET 1 0 72 68\n")
-    assert client.recv(32) == b"0:0\n"
+    assert client.recv(32) == (
+        f"0:0:{marker_controller.latest_black_threshold}\n".encode()
+    )
     client.close()
     thread.join(timeout=1)
 
     assert marker_controller.latest_robot_left_pwm == 72
     assert marker_controller.latest_robot_right_pwm == 68
+
+
+def test_settings_endpoint_updates_black_threshold(monkeypatch):
+    monkeypatch.setattr(
+        marker_controller,
+        "latest_black_threshold",
+        marker_controller.BLACK_THRESHOLD_DEFAULT,
+    )
+    client = marker_controller.app.test_client()
+
+    response = client.post("/settings", json={"black_threshold": 4})
+
+    assert response.status_code == 200
+    assert response.get_json()["black_threshold"] == 4
+    assert marker_controller.latest_black_threshold == 4
+
+
+def test_legacy_robot_request_keeps_two_value_response(monkeypatch):
+    monkeypatch.setattr(marker_controller, "latest_command", marker_controller.stop_command())
+    server, client = socket.socketpair()
+    thread = threading.Thread(
+        target=marker_controller.handle_tcp_client,
+        args=(server, ("legacy", 0)),
+    )
+    thread.start()
+
+    client.sendall(b"GET 1 0\n")
+    assert client.recv(32) == b"0:0\n"
+    client.close()
+    thread.join(timeout=1)

@@ -14,10 +14,9 @@
 #define PWM_SERVER_PORT 65432
 #define MOTOR_POWER_MIN (-100)
 #define MOTOR_POWER_MAX 100
-#define WHITE_BRIGHTNESS 30
-#define BLACK_BRIGHTNESS 0
-#define BLACK_REFLECTION_THRESHOLD \
-    ((WHITE_BRIGHTNESS + BLACK_BRIGHTNESS) / 2)
+#define BLACK_REFLECTION_THRESHOLD_DEFAULT 8
+#define REFLECTION_MIN 0
+#define REFLECTION_MAX 100
 
 static volatile bool fg_paused = true;
 static pup_motor_t *fg_left_motor = NULL;
@@ -26,6 +25,7 @@ static pup_device_t *fg_color_sensor = NULL;
 static bool fg_server_connected = false;
 static int fg_applied_left_pwm = 0;
 static int fg_applied_right_pwm = 0;
+static int fg_black_threshold = BLACK_REFLECTION_THRESHOLD_DEFAULT;
 
 static int clamp_motor_power(int power)
 {
@@ -57,7 +57,7 @@ static bool color_sensor_is_black(void)
     }
 
     return pup_color_sensor_reflection(fg_color_sensor)
-        < BLACK_REFLECTION_THRESHOLD;
+        < fg_black_threshold;
 }
 
 void DirectPwmController_Configure(
@@ -98,11 +98,18 @@ void direct_pwm_task(intptr_t unused)
 
     if (!fg_server_connected || !PwmClient_Get(
             &left_pwm, &right_pwm, !fg_paused, black_stop,
-            fg_applied_left_pwm, fg_applied_right_pwm)) {
+            fg_applied_left_pwm, fg_applied_right_pwm,
+            &fg_black_threshold)) {
         fg_server_connected = false;
         stop_motors();
         ext_tsk();
         return;
+    }
+
+    if (fg_black_threshold < REFLECTION_MIN) {
+        fg_black_threshold = REFLECTION_MIN;
+    } else if (fg_black_threshold > REFLECTION_MAX) {
+        fg_black_threshold = REFLECTION_MAX;
     }
 
     if (fg_paused || black_stop || color_sensor_is_black()) {

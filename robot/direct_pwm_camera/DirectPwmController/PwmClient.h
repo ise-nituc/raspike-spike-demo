@@ -13,6 +13,7 @@ bool PwmClient_Get(
     bool control_enabled,
     bool black_stop,
     int applied_left_pwm,
-    int applied_right_pwm);
+    int applied_right_pwm,
+    int *black_threshold);
 
 #endif

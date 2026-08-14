@@ -108,15 +108,18 @@ bool PwmClient_Get(
     bool control_enabled,
     bool black_stop,
     int applied_left_pwm,
-    int applied_right_pwm)
+    int applied_right_pwm,
+    int *black_threshold)
 {
     char request[32];
     char response[RESPONSE_BUFFER_SIZE];
     int left;
     int right;
+    int threshold;
     char trailing;
 
-    if (fg_sock < 0 || left_pwm == NULL || right_pwm == NULL) {
+    if (fg_sock < 0 || left_pwm == NULL || right_pwm == NULL
+        || black_threshold == NULL) {
         return false;
     }
 
@@ -142,12 +145,13 @@ bool PwmClient_Get(
         return false;
     }
 
-    if (sscanf(response, "%d:%d%c", &left, &right, &trailing) != 2) {
+    if (sscanf(response, "%d:%d:%d%c", &left, &right, &threshold, &trailing) != 3) {
         printf("PwmClient: parse failed: %s\n", response);
         return false;
     }
 
     *left_pwm = left;
     *right_pwm = right;
+    *black_threshold = threshold;
     return true;
 }

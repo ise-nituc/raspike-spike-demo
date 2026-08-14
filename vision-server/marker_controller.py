@@ -55,6 +55,11 @@ DEADZONE_DEFAULT = float(os.environ.get("RASPIKE_DEADZONE", "0.05"))
 DEADZONE_MIN = 0.0
 DEADZONE_MAX = 0.30
 
+# 走行体の黒線停止に使うカラーセンサー反射光の閾値（0〜100）。
+BLACK_THRESHOLD_DEFAULT = int(os.environ.get("RASPIKE_BLACK_THRESHOLD", "8"))
+BLACK_THRESHOLD_MIN = 0
+BLACK_THRESHOLD_MAX = 100
+
 # 正面付近では意図しない旋回を抑える（sin(theta) に対する比率）
 TURN_DEADZONE = 0.10
 
@@ -93,6 +98,9 @@ latest_black_stop = None
 latest_robot_status_time = 0.0
 latest_speed_gain = max(SPEED_GAIN_MIN, min(SPEED_GAIN_DEFAULT, SPEED_GAIN_MAX))
 latest_deadzone = max(DEADZONE_MIN, min(DEADZONE_DEFAULT, DEADZONE_MAX))
+latest_black_threshold = max(
+    BLACK_THRESHOLD_MIN, min(BLACK_THRESHOLD_DEFAULT, BLACK_THRESHOLD_MAX)
+)
 latest_robot_left_pwm = None
 latest_robot_right_pwm = None
 state_lock = threading.Lock()
@@ -394,18 +402,23 @@ def send_motor_command(cmd):
 # RasPike-ART向けTCPサーバ
 # ============================================================
 
-def get_latest_motor_command_text():
+def get_latest_motor_command_text(include_black_threshold=False):
     """
     最新の左右PWM値を ``left:right`` 形式の1行テキストとして返す。
     起動直後など、まだ制御値がない場合は停止値を返す。
     """
     with state_lock:
         cmd = latest_command
+        black_threshold = latest_black_threshold
 
     if cmd is None:
-        return "0:0\n"
+        pwm_text = "0:0"
+    else:
+        pwm_text = f"{cmd.left_pwm}:{cmd.right_pwm}"
 
-    return f"{cmd.left_pwm}:{cmd.right_pwm}\n"
+    if include_black_threshold:
+        return f"{pwm_text}:{black_threshold}\n"
+    return f"{pwm_text}\n"
 
 
 def handle_tcp_client(conn, addr):
@@ -452,7 +465,9 @@ def handle_tcp_client(conn, addr):
                                 conn.sendall(response.encode())
                                 continue
                         latest_robot_status_time = time.monotonic()
-                    response = get_latest_motor_command_text()
+                    response = get_latest_motor_command_text(
+                        include_black_threshold=len(parts) == 5
+                    )
                 elif request == "GET":
                     # 旧クライアントとの互換性を維持する。
                     response = get_latest_motor_command_text()
@@ -782,6 +797,9 @@ def index():
           <div class="tuning-head"><label for="deadzone" class="tuning-title">中央の停止範囲</label><output id="deadzone-value" class="gain-value" for="deadzone">5%</output></div>
           <input id="deadzone" class="gain-slider" type="range" min="0" max="0.30" step="0.01" value="0.05">
           <p class="card-note">小さくすると、中央から少し動かしただけで前進・後退します。</p>
+          <div class="tuning-head"><label for="black-threshold" class="tuning-title">黒線の判定値</label><output id="black-threshold-value" class="gain-value" for="black-threshold">8</output></div>
+          <input id="black-threshold" class="gain-slider" type="range" min="0" max="100" step="1" value="8">
+          <p class="card-note">薄茶色で停止する場合は小さくします。小さすぎると黒線を見逃すため、実際の床で確認してください。</p>
           <p id="pwm-readout" class="pwm-readout">計算PWM: L=0 / R=0</p>
           <p id="robot-pwm-readout" class="pwm-readout">ロボット適用PWM: 通信待ち</p>
           <p class="card-note">※ 計算した指令値です。モータが実際に回転したことを検知する表示ではありません。</p>
@@ -873,6 +891,8 @@ def index():
             $('gain-value').textContent = Number(data.speed_gain).toFixed(2) + ' 倍';
             $('deadzone').value = Number(data.deadzone).toFixed(2);
             $('deadzone-value').textContent = Math.round(Number(data.deadzone) * 100) + '%';
+            $('black-threshold').value = String(data.black_threshold);
+            $('black-threshold-value').textContent = String(data.black_threshold);
           }
           $('connection').classList.remove('offline'); $('connection').lastElementChild.textContent = 'つながっています';
           previous = data;
@@ -882,20 +902,22 @@ def index():
       }
       const saveSettings = async () => {
         const gain = Number($('gain').value), deadzone = Number($('deadzone').value);
+        const blackThreshold = Number($('black-threshold').value);
         $('gain-value').textContent = gain.toFixed(2) + ' 倍';
         $('deadzone-value').textContent = Math.round(deadzone * 100) + '%';
+        $('black-threshold-value').textContent = String(blackThreshold);
         clearTimeout(settingsTimer);
         settingsTimer = setTimeout(async () => {
           try {
             const response = await fetch('/settings', {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ speed_gain: gain, deadzone })
+              body: JSON.stringify({ speed_gain: gain, deadzone, black_threshold: blackThreshold })
             });
             if (!response.ok) throw new Error(response.status);
           } finally { settingsEditing = false; }
         }, 180);
       };
-      for (const id of ['gain', 'deadzone']) {
+      for (const id of ['gain', 'deadzone', 'black-threshold']) {
         $(id).addEventListener('input', () => { settingsEditing = true; saveSettings(); });
       }
       update(); setInterval(update, 600);
@@ -919,6 +941,7 @@ def status():
         deadzone = latest_deadzone
         robot_left_pwm = latest_robot_left_pwm
         robot_right_pwm = latest_robot_right_pwm
+        black_threshold = latest_black_threshold
 
     robot_status_fresh = time.monotonic() - robot_status_time <= 1.0
 
@@ -939,6 +962,7 @@ def status():
         "deadzone": deadzone,
         "robot_left_pwm": robot_left_pwm if robot_status_fresh else None,
         "robot_right_pwm": robot_right_pwm if robot_status_fresh else None,
+        "black_threshold": black_threshold,
     })
 
 
@@ -946,7 +970,7 @@ def status():
 def settings():
     """Web画面からモータ出力倍率を安全な範囲で更新する。"""
     payload = request.get_json(silent=True) or {}
-    if not ({"speed_gain", "deadzone"} & payload.keys()):
+    if not ({"speed_gain", "deadzone", "black_threshold"} & payload.keys()):
         return jsonify({"error": "no supported setting supplied"}), 400
 
     def validated_number(name, current, low, high):
@@ -962,6 +986,7 @@ def settings():
 
     global latest_speed_gain
     global latest_deadzone
+    global latest_black_threshold
     with state_lock:
         try:
             speed_gain = validated_number(
@@ -970,11 +995,22 @@ def settings():
             deadzone = validated_number(
                 "deadzone", latest_deadzone, DEADZONE_MIN, DEADZONE_MAX
             )
+            black_threshold = validated_number(
+                "black_threshold",
+                latest_black_threshold,
+                BLACK_THRESHOLD_MIN,
+                BLACK_THRESHOLD_MAX,
+            )
         except ValueError as error:
             return jsonify({"error": str(error)}), 400
         latest_speed_gain = speed_gain
         latest_deadzone = deadzone
-    return jsonify({"speed_gain": speed_gain, "deadzone": deadzone})
+        latest_black_threshold = int(round(black_threshold))
+    return jsonify({
+        "speed_gain": speed_gain,
+        "deadzone": deadzone,
+        "black_threshold": latest_black_threshold,
+    })
 
 
 def generate_mjpeg():
