@@ -53,8 +53,8 @@ TURN_DEADZONE = 0.10
 
 # 操作量カーブ
 # 1.0: 線形
-# 1.5〜2.0: 中心付近を鈍く、外側で強く
-GAMMA = 1.5
+# 1.0未満: デッドゾーンを出た直後から操作量を大きめにする
+GAMMA = 0.7
 
 # 旋回の効き
 TURN_GAIN = 1.0
@@ -65,9 +65,6 @@ MIN_GREEN_AREA = 80
 
 # 赤と緑の重心が近すぎる場合は向きが不安定なので無効にする
 MIN_MARKER_DISTANCE = 20.0
-
-# 見失ったときに停止するまでの猶予秒数
-LOST_TIMEOUT_SEC = 0.3
 
 # Webサーバ設定
 WEB_HOST = "0.0.0.0"
@@ -555,6 +552,20 @@ def draw_debug_view(frame_bgr, marker, cmd, processing_ms):
     return view
 
 
+def make_marker_only_frame(frame_bgr, marker):
+    """Web表示用に、検出した赤・緑マーカー以外を黒く隠す。"""
+    marker_mask = np.zeros(frame_bgr.shape[:2], dtype=np.uint8)
+    if marker is not None:
+        cv2.drawContours(
+            marker_mask,
+            [marker.red.contour, marker.green.contour],
+            -1,
+            255,
+            cv2.FILLED,
+        )
+    return cv2.bitwise_and(frame_bgr, frame_bgr, mask=marker_mask)
+
+
 # ============================================================
 # メイン
 # ============================================================
@@ -582,9 +593,6 @@ def vision_loop():
     # 露出やホワイトバランスが落ち着くのを待つ
     time.sleep(1.0)
 
-    last_seen_time = 0.0
-    last_cmd = stop_command()
-
     print("marker detection started")
 
     try:
@@ -597,24 +605,17 @@ def vision_loop():
 
             marker, red_mask, green_mask = detect_marker(frame_bgr)
 
-            now = time.perf_counter()
-
             if marker is not None:
                 cmd = calculate_motor_command(marker)
-                last_seen_time = now
-                last_cmd = cmd
             else:
-                # 一瞬見失っただけなら直前値を少しだけ保持してもよい。
-                # 安全寄りにするなら即停止でもよい。
-                if now - last_seen_time <= LOST_TIMEOUT_SEC:
-                    cmd = last_cmd
-                else:
-                    cmd = stop_command()
+                # どちらかのマーカーを見失ったら、直前値を保持せず即停止する。
+                cmd = stop_command()
 
             send_motor_command(cmd)
 
             processing_ms = (time.perf_counter() - loop_t0) * 1000.0
-            view = draw_debug_view(frame_bgr, marker, cmd, processing_ms)
+            privacy_frame = make_marker_only_frame(frame_bgr, marker)
+            view = draw_debug_view(privacy_frame, marker, cmd, processing_ms)
 
             with state_lock:
                 latest_frame = view

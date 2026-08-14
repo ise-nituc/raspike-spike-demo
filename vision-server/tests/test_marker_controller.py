@@ -51,3 +51,18 @@ def test_twisting_marker_turns_even_at_image_center():
     assert right.forward == left.forward == 0
     assert right.left_pwm < 0 < right.right_pwm
     assert left.right_pwm < 0 < left.left_pwm
+
+
+def test_output_rises_quickly_after_forward_deadzone():
+    just_outside = marker_controller.calculate_motor_command(
+        marker(
+            marker_controller.WIDTH / 2,
+            marker_controller.HEIGHT / 2
+            - marker_controller.ACTIVE_RADIUS * 0.30,
+            0.0,
+        )
+    )
+
+    assert just_outside.forward > 0.25
+    assert just_outside.left_pwm >= 13
+    assert just_outside.right_pwm >= 13
