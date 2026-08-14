@@ -14,12 +14,8 @@
 
 操作:
 - マーカー中心が画像中心付近: 停止
-- 画像中心から離れるほど: 操作強度が増える
-- 赤→緑の向き:
-    上    : 前進
-    右    : 右旋回
-    下    : 後退
-    左    : 左旋回
+- ぬいぐるみを画面の上／下へ動かす: 前進／後退
+- 赤→緑の向きを画面の右／左へひねる: 右／左旋回
 """
 
 import os
@@ -51,6 +47,9 @@ ACTIVE_RADIUS = min(WIDTH, HEIGHT) * 0.40
 
 # 中心付近の停止領域
 DEADZONE = 0.15
+
+# 正面付近では意図しない旋回を抑える（sin(theta) に対する比率）
+TURN_DEADZONE = 0.10
 
 # 操作量カーブ
 # 1.0: 線形
@@ -144,6 +143,20 @@ def normalize_motor_pair(left, right):
 
 def angle_deg(rad):
     return math.degrees(rad)
+
+
+def orient_camera_frame(frame_bgr):
+    """機体前方が画面上になるよう、カメラ画像を上下反転する。"""
+    return cv2.flip(frame_bgr, 0)
+
+
+def apply_deadzone(value, deadzone):
+    """符号を保ったままデッドゾーンを除き、残りを 0〜1 に再正規化する。"""
+    magnitude = abs(value)
+    if magnitude <= deadzone:
+        return 0.0
+    scaled = (magnitude - deadzone) / (1.0 - deadzone)
+    return math.copysign(scaled, value)
 
 
 # ============================================================
@@ -290,28 +303,22 @@ def calculate_motor_command(marker):
     マーカー状態から left_pwm / right_pwm を計算する。
     """
 
-    image_cx = WIDTH / 2.0
     image_cy = HEIGHT / 2.0
 
-    # 画像中心からマーカー中心までのずれ
-    dx = marker.cx - image_cx
+    # 画像中心からマーカー中心までの前後方向のずれ。
+    # orient_camera_frame() 後は画面上が機体前方となる。
     dy = image_cy - marker.cy  # 上を正にする
 
-    distance = math.sqrt(dx * dx + dy * dy)
+    # 前進・後退はマーカー中心の前後位置だけで決める。横へずらしても
+    # 速度が上がらないため、ぬいぐるみをカメラへ厳密に合わせる必要がない。
+    forward_ratio = clip(dy / ACTIVE_RADIUS, -1.0, 1.0)
+    forward = apply_deadzone(forward_ratio, DEADZONE)
+    forward = math.copysign(abs(forward) ** GAMMA, forward) if forward else 0.0
 
-    # 0.0〜1.0に正規化
-    r = clip(distance / ACTIVE_RADIUS, 0.0, 1.0)
-
-    # デッドゾーン処理
-    if r <= DEADZONE:
-        strength = 0.0
-    else:
-        strength = (r - DEADZONE) / (1.0 - DEADZONE)
-        strength = strength ** GAMMA
-
-    # 向きから前後成分・旋回成分を計算
-    forward = strength * math.cos(marker.theta)
-    turn = strength * math.sin(marker.theta)
+    # 旋回は赤→緑の向きだけで決める。中心位置に関係なく、ぬいぐるみを
+    # その場でひねる操作にロボットが追従する。
+    turn = apply_deadzone(math.sin(marker.theta), TURN_DEADZONE)
+    strength = max(abs(forward), abs(turn))
 
     # 差動二輪への変換
     left = forward - TURN_GAIN * turn
@@ -329,7 +336,7 @@ def calculate_motor_command(marker):
         strength=strength,
         forward=forward,
         turn=turn,
-        distance_ratio=r,
+        distance_ratio=abs(forward_ratio),
         theta_deg=angle_deg(marker.theta),
     )
 
@@ -586,7 +593,7 @@ def vision_loop():
 
             # RGB888 というフォーマット名に反して、配列のチャンネル順は
             # OpenCV と同じ BGR。RGB とみなして入れ替えると赤と青が反転する。
-            frame_bgr = picam2.capture_array()
+            frame_bgr = orient_camera_frame(picam2.capture_array())
 
             marker, red_mask, green_mask = detect_marker(frame_bgr)
 
@@ -778,7 +785,7 @@ def index():
           const controlEnabled = robotFresh && data.control_enabled === true;
           const blackStop = robotFresh && data.black_stop === true;
           const moving = Math.max(Math.abs(left), Math.abs(right)) > 1 && controlEnabled && !blackStop;
-          const strength = Math.max(0, Number(data.strength) || 0);
+          const strength = Math.abs(Number(data.forward) || 0);
           const [directionText, directionIcon] = direction(Number(data.theta_deg) || 0);
 
           setCard('detect', found ? 'みつけたよ！' : 'さがしています…');
@@ -835,6 +842,8 @@ def status():
         "left_pwm": 0 if cmd is None else cmd.left_pwm,
         "right_pwm": 0 if cmd is None else cmd.right_pwm,
         "strength": 0.0 if cmd is None else cmd.strength,
+        "forward": 0.0 if cmd is None else cmd.forward,
+        "turn": 0.0 if cmd is None else cmd.turn,
         "theta_deg": 0.0 if cmd is None else cmd.theta_deg,
         "processing_ms": processing_ms,
         "control_enabled": control_enabled if robot_status_fresh else None,
