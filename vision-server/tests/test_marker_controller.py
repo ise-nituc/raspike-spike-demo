@@ -66,3 +66,38 @@ def test_output_rises_quickly_after_forward_deadzone():
     assert just_outside.forward > 0.25
     assert just_outside.left_pwm >= 13
     assert just_outside.right_pwm >= 13
+
+
+def test_speed_gain_increases_pwm_and_remains_bounded():
+    target = marker(marker_controller.WIDTH / 2, 70, 0.0)
+
+    low = marker_controller.calculate_motor_command(target, speed_gain=0.5)
+    high = marker_controller.calculate_motor_command(target, speed_gain=2.0)
+
+    assert high.left_pwm > low.left_pwm
+    assert high.right_pwm > low.right_pwm
+    assert high.left_pwm <= marker_controller.PWM_MAX
+    assert high.right_pwm <= marker_controller.PWM_MAX
+
+
+def test_settings_endpoint_updates_and_clamps_speed_gain(monkeypatch):
+    monkeypatch.setattr(
+        marker_controller,
+        "latest_speed_gain",
+        marker_controller.SPEED_GAIN_DEFAULT,
+    )
+    client = marker_controller.app.test_client()
+
+    response = client.post("/settings", json={"speed_gain": 9})
+
+    assert response.status_code == 200
+    assert response.get_json()["speed_gain"] == marker_controller.SPEED_GAIN_MAX
+    assert marker_controller.latest_speed_gain == marker_controller.SPEED_GAIN_MAX
+
+
+def test_settings_endpoint_rejects_invalid_speed_gain():
+    client = marker_controller.app.test_client()
+
+    response = client.post("/settings", json={"speed_gain": "fast"})
+
+    assert response.status_code == 400

@@ -27,7 +27,7 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
-from flask import Flask, Response, jsonify, render_template_string
+from flask import Flask, Response, jsonify, render_template_string, request
 from picamera2 import Picamera2
 
 
@@ -40,6 +40,11 @@ HEIGHT = 240
 
 # モータ出力設定
 PWM_MAX = 50
+
+# Web画面から調整するモータ出力倍率。計算値は最終的に PWM_MAX で制限する。
+SPEED_GAIN_DEFAULT = float(os.environ.get("RASPIKE_SPEED_GAIN", "1.5"))
+SPEED_GAIN_MIN = 0.5
+SPEED_GAIN_MAX = 3.0
 
 # 操作領域設定
 # 画像中心からこの距離まで離すと最大操作量になる
@@ -84,6 +89,7 @@ latest_processing_ms = 0.0
 latest_control_enabled = None
 latest_black_stop = None
 latest_robot_status_time = 0.0
+latest_speed_gain = max(SPEED_GAIN_MIN, min(SPEED_GAIN_DEFAULT, SPEED_GAIN_MAX))
 state_lock = threading.Lock()
 
 app = Flask(__name__)
@@ -295,7 +301,7 @@ def detect_marker(frame_bgr):
 # モータ指令計算
 # ============================================================
 
-def calculate_motor_command(marker):
+def calculate_motor_command(marker, speed_gain=SPEED_GAIN_DEFAULT):
     """
     マーカー状態から left_pwm / right_pwm を計算する。
     """
@@ -318,8 +324,8 @@ def calculate_motor_command(marker):
     strength = max(abs(forward), abs(turn))
 
     # 差動二輪への変換
-    left = forward - TURN_GAIN * turn
-    right = forward + TURN_GAIN * turn
+    left = speed_gain * (forward - TURN_GAIN * turn)
+    right = speed_gain * (forward + TURN_GAIN * turn)
 
     # 比率を保って -1.0〜+1.0 に収める
     left, right = normalize_motor_pair(left, right)
@@ -606,7 +612,9 @@ def vision_loop():
             marker, red_mask, green_mask = detect_marker(frame_bgr)
 
             if marker is not None:
-                cmd = calculate_motor_command(marker)
+                with state_lock:
+                    speed_gain = latest_speed_gain
+                cmd = calculate_motor_command(marker, speed_gain)
             else:
                 # どちらかのマーカーを見失ったら、直前値を保持せず即停止する。
                 cmd = stop_command()
@@ -682,6 +690,12 @@ def index():
     .status-card.safety { background: #edf0ee; }
     .status-card.safety.active { background: #fbe2df; }
     .status-card.safety.active .card-value { color: #a83a32; }
+    .tuning { grid-column: 1 / -1; padding: 18px; border-radius: 20px; background: #f2ecff; }
+    .tuning-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+    .tuning-title { margin: 0; font-size: 1.05rem; font-weight: 900; }
+    .gain-value { color: #7048a8; font-size: 1.35rem; font-weight: 900; }
+    .gain-slider { width: 100%; margin: 14px 0 6px; accent-color: #7048a8; }
+    .pwm-readout { margin: 9px 0 0; font-family: ui-monospace, Consolas, monospace; font-weight: 800; }
     .card-label { margin: 0 0 10px; color: var(--muted); font-size: .83rem; font-weight: 800; }
     .card-value { margin: 0; font-size: clamp(1.35rem, 2.5vw, 2rem); font-weight: 900; line-height: 1.2; }
     .detect .card-value { color: #19784c; }
@@ -735,6 +749,13 @@ def index():
         <article id="motion-card" class="status-card motion"><span id="motion-icon" class="icon" aria-hidden="true">■</span><p class="card-label">ロボット</p><p id="motion" class="card-value">ストップ！</p><p id="motion-note" class="card-note">ぬいぐるみを待っています</p></article>
         <article id="control-card" class="status-card control"><span id="control-icon" class="icon" aria-hidden="true">—</span><p class="card-label">フォースセンサ</p><p id="control" class="card-value">状態不明</p><p id="control-note" class="card-note">ロボットからの通信を待っています</p></article>
         <article id="safety-card" class="status-card safety"><span id="safety-icon" class="icon" aria-hidden="true">—</span><p class="card-label">黒線ストップ</p><p id="safety" class="card-value">状態不明</p><p id="safety-note" class="card-note">ロボットからの通信を待っています</p></article>
+        <section class="status-card tuning" aria-labelledby="gain-title">
+          <div class="tuning-head"><h2 id="gain-title" class="tuning-title">モータ感度</h2><output id="gain-value" class="gain-value" for="gain">1.50 倍</output></div>
+          <input id="gain" class="gain-slider" type="range" min="0.5" max="3.0" step="0.1" value="1.5" aria-describedby="gain-note">
+          <p id="gain-note" class="card-note">大きくすると、同じぬいぐるみ操作でもモータ指令が強くなります。</p>
+          <p id="pwm-readout" class="pwm-readout">計算PWM: L=0 / R=0</p>
+          <p class="card-note">※ 計算した指令値です。モータが実際に回転したことを検知する表示ではありません。</p>
+        </section>
       </div>
     </section>
 
@@ -763,6 +784,7 @@ def index():
     (() => {
       const $ = id => document.getElementById(id);
       let previous = {};
+      let gainEditing = false, gainTimer;
       const setCard = (id, value) => {
         const el = $(id); if (el.textContent === value) return;
         el.textContent = value; const card = $(id + '-card');
@@ -812,12 +834,32 @@ def index():
           $('raw-processing').textContent = number(data.processing_ms, 1) + (Number.isFinite(Number(data.processing_ms)) ? ' ms' : '');
           $('raw-control').textContent = robotFresh ? String(data.control_enabled) : '—';
           $('raw-black-stop').textContent = robotFresh ? String(data.black_stop) : '—';
+          $('pwm-readout').textContent = `計算PWM: L=${left} / R=${right}`;
+          if (!gainEditing) {
+            $('gain').value = Number(data.speed_gain).toFixed(1);
+            $('gain-value').textContent = Number(data.speed_gain).toFixed(2) + ' 倍';
+          }
           $('connection').classList.remove('offline'); $('connection').lastElementChild.textContent = 'つながっています';
           previous = data;
         } catch (error) {
           $('connection').classList.add('offline'); $('connection').lastElementChild.textContent = 'つなぎ直しています…';
         }
       }
+      const saveGain = async () => {
+        const value = Number($('gain').value);
+        $('gain-value').textContent = value.toFixed(2) + ' 倍';
+        clearTimeout(gainTimer);
+        gainTimer = setTimeout(async () => {
+          try {
+            const response = await fetch('/settings', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ speed_gain: value })
+            });
+            if (!response.ok) throw new Error(response.status);
+          } finally { gainEditing = false; }
+        }, 180);
+      };
+      $('gain').addEventListener('input', () => { gainEditing = true; saveGain(); });
       update(); setInterval(update, 600);
     })();
   </script>
@@ -835,6 +877,7 @@ def status():
         control_enabled = latest_control_enabled
         black_stop = latest_black_stop
         robot_status_time = latest_robot_status_time
+        speed_gain = latest_speed_gain
 
     robot_status_fresh = time.monotonic() - robot_status_time <= 1.0
 
@@ -850,7 +893,27 @@ def status():
         "control_enabled": control_enabled if robot_status_fresh else None,
         "black_stop": black_stop if robot_status_fresh else None,
         "robot_status_fresh": robot_status_fresh,
+        "speed_gain": speed_gain,
     })
+
+
+@app.post("/settings")
+def settings():
+    """Web画面からモータ出力倍率を安全な範囲で更新する。"""
+    payload = request.get_json(silent=True) or {}
+    try:
+        speed_gain = float(payload["speed_gain"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "speed_gain must be a number"}), 400
+
+    if not math.isfinite(speed_gain):
+        return jsonify({"error": "speed_gain must be finite"}), 400
+
+    speed_gain = clip(speed_gain, SPEED_GAIN_MIN, SPEED_GAIN_MAX)
+    global latest_speed_gain
+    with state_lock:
+        latest_speed_gain = speed_gain
+    return jsonify({"speed_gain": speed_gain})
 
 
 def generate_mjpeg():
