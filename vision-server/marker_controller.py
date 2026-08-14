@@ -14,12 +14,8 @@
 
 操作:
 - マーカー中心が画像中心付近: 停止
-- 画像中心から離れるほど: 操作強度が増える
-- 赤→緑の向き:
-    上    : 前進
-    右    : 右旋回
-    下    : 後退
-    左    : 左旋回
+- ぬいぐるみを画面の上／下へ動かす: 前進／後退
+- 赤→緑の向きを画面の右／左へひねる: 右／左旋回
 """
 
 import os
@@ -31,7 +27,7 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
-from flask import Flask, Response, jsonify, render_template_string
+from flask import Flask, Response, jsonify, render_template_string, request
 from picamera2 import Picamera2
 
 
@@ -43,19 +39,34 @@ WIDTH = 320
 HEIGHT = 240
 
 # モータ出力設定
-PWM_MAX = 50
+PWM_MAX = 100
+
+# Web画面から調整するモータ出力倍率。計算値は最終的に PWM_MAX で制限する。
+SPEED_GAIN_DEFAULT = float(os.environ.get("RASPIKE_SPEED_GAIN", "1.5"))
+SPEED_GAIN_MIN = 0.5
+SPEED_GAIN_MAX = 6.0
 
 # 操作領域設定
 # 画像中心からこの距離まで離すと最大操作量になる
 ACTIVE_RADIUS = min(WIDTH, HEIGHT) * 0.40
 
 # 中心付近の停止領域
-DEADZONE = 0.15
+DEADZONE_DEFAULT = float(os.environ.get("RASPIKE_DEADZONE", "0.05"))
+DEADZONE_MIN = 0.0
+DEADZONE_MAX = 0.30
+
+# 走行体の黒線停止に使うカラーセンサー反射光の閾値（0〜100）。
+BLACK_THRESHOLD_DEFAULT = int(os.environ.get("RASPIKE_BLACK_THRESHOLD", "8"))
+BLACK_THRESHOLD_MIN = 0
+BLACK_THRESHOLD_MAX = 100
+
+# 正面付近では意図しない旋回を抑える（sin(theta) に対する比率）
+TURN_DEADZONE = 0.10
 
 # 操作量カーブ
 # 1.0: 線形
-# 1.5〜2.0: 中心付近を鈍く、外側で強く
-GAMMA = 1.5
+# 1.0未満: デッドゾーンを出た直後から操作量を大きめにする
+GAMMA = 0.7
 
 # 旋回の効き
 TURN_GAIN = 1.0
@@ -66,9 +77,6 @@ MIN_GREEN_AREA = 80
 
 # 赤と緑の重心が近すぎる場合は向きが不安定なので無効にする
 MIN_MARKER_DISTANCE = 20.0
-
-# 見失ったときに停止するまでの猶予秒数
-LOST_TIMEOUT_SEC = 0.3
 
 # Webサーバ設定
 WEB_HOST = "0.0.0.0"
@@ -88,6 +96,13 @@ latest_processing_ms = 0.0
 latest_control_enabled = None
 latest_black_stop = None
 latest_robot_status_time = 0.0
+latest_speed_gain = max(SPEED_GAIN_MIN, min(SPEED_GAIN_DEFAULT, SPEED_GAIN_MAX))
+latest_deadzone = max(DEADZONE_MIN, min(DEADZONE_DEFAULT, DEADZONE_MAX))
+latest_black_threshold = max(
+    BLACK_THRESHOLD_MIN, min(BLACK_THRESHOLD_DEFAULT, BLACK_THRESHOLD_MAX)
+)
+latest_robot_left_pwm = None
+latest_robot_right_pwm = None
 state_lock = threading.Lock()
 
 app = Flask(__name__)
@@ -144,6 +159,20 @@ def normalize_motor_pair(left, right):
 
 def angle_deg(rad):
     return math.degrees(rad)
+
+
+def orient_camera_frame(frame_bgr):
+    """機体前方が画面上になるよう、カメラ画像を上下反転する。"""
+    return cv2.flip(frame_bgr, 0)
+
+
+def apply_deadzone(value, deadzone):
+    """符号を保ったままデッドゾーンを除き、残りを 0〜1 に再正規化する。"""
+    magnitude = abs(value)
+    if magnitude <= deadzone:
+        return 0.0
+    scaled = (magnitude - deadzone) / (1.0 - deadzone)
+    return math.copysign(scaled, value)
 
 
 # ============================================================
@@ -285,37 +314,35 @@ def detect_marker(frame_bgr):
 # モータ指令計算
 # ============================================================
 
-def calculate_motor_command(marker):
+def calculate_motor_command(
+    marker, speed_gain=SPEED_GAIN_DEFAULT, deadzone=DEADZONE_DEFAULT
+):
     """
     マーカー状態から left_pwm / right_pwm を計算する。
     """
 
-    image_cx = WIDTH / 2.0
     image_cy = HEIGHT / 2.0
 
-    # 画像中心からマーカー中心までのずれ
-    dx = marker.cx - image_cx
+    # 画像中心からマーカー中心までの前後方向のずれ。
+    # orient_camera_frame() 後は画面上が機体前方となる。
     dy = image_cy - marker.cy  # 上を正にする
 
-    distance = math.sqrt(dx * dx + dy * dy)
+    # 前進・後退はマーカー中心の前後位置だけで決める。横へずらしても
+    # 速度が上がらないため、ぬいぐるみをカメラへ厳密に合わせる必要がない。
+    forward_ratio = clip(dy / ACTIVE_RADIUS, -1.0, 1.0)
+    forward = apply_deadzone(forward_ratio, deadzone)
+    forward = math.copysign(abs(forward) ** GAMMA, forward) if forward else 0.0
 
-    # 0.0〜1.0に正規化
-    r = clip(distance / ACTIVE_RADIUS, 0.0, 1.0)
-
-    # デッドゾーン処理
-    if r <= DEADZONE:
-        strength = 0.0
-    else:
-        strength = (r - DEADZONE) / (1.0 - DEADZONE)
-        strength = strength ** GAMMA
-
-    # 向きから前後成分・旋回成分を計算
-    forward = strength * math.cos(marker.theta)
-    turn = strength * math.sin(marker.theta)
+    # 旋回は赤→緑の向きだけで決める。中心位置に関係なく、ぬいぐるみを
+    # その場でひねる操作にロボットが追従する。
+    turn = apply_deadzone(math.sin(marker.theta), TURN_DEADZONE)
+    strength = max(abs(forward), abs(turn))
 
     # 差動二輪への変換
-    left = forward - TURN_GAIN * turn
-    right = forward + TURN_GAIN * turn
+    # 右旋回は左を正、右を負にする。前後成分とは独立しているため、
+    # マーカーが中央にあっても left=+N, right=-N のその場旋回になる。
+    left = speed_gain * (forward + TURN_GAIN * turn)
+    right = speed_gain * (forward - TURN_GAIN * turn)
 
     # 比率を保って -1.0〜+1.0 に収める
     left, right = normalize_motor_pair(left, right)
@@ -329,7 +356,7 @@ def calculate_motor_command(marker):
         strength=strength,
         forward=forward,
         turn=turn,
-        distance_ratio=r,
+        distance_ratio=abs(forward_ratio),
         theta_deg=angle_deg(marker.theta),
     )
 
@@ -375,18 +402,23 @@ def send_motor_command(cmd):
 # RasPike-ART向けTCPサーバ
 # ============================================================
 
-def get_latest_motor_command_text():
+def get_latest_motor_command_text(include_black_threshold=False):
     """
     最新の左右PWM値を ``left:right`` 形式の1行テキストとして返す。
     起動直後など、まだ制御値がない場合は停止値を返す。
     """
     with state_lock:
         cmd = latest_command
+        black_threshold = latest_black_threshold
 
     if cmd is None:
-        return "0:0\n"
+        pwm_text = "0:0"
+    else:
+        pwm_text = f"{cmd.left_pwm}:{cmd.right_pwm}"
 
-    return f"{cmd.left_pwm}:{cmd.right_pwm}\n"
+    if include_black_threshold:
+        return f"{pwm_text}:{black_threshold}\n"
+    return f"{pwm_text}\n"
 
 
 def handle_tcp_client(conn, addr):
@@ -410,15 +442,32 @@ def handle_tcp_client(conn, addr):
                 request = request_line.decode(errors="ignore").strip()
 
                 parts = request.split()
-                if len(parts) == 3 and parts[0] == "GET" and parts[1] in {"0", "1"} and parts[2] in {"0", "1"}:
+                if (
+                    len(parts) in {3, 5}
+                    and parts[0] == "GET"
+                    and parts[1] in {"0", "1"}
+                    and parts[2] in {"0", "1"}
+                ):
                     global latest_control_enabled
                     global latest_black_stop
                     global latest_robot_status_time
+                    global latest_robot_left_pwm
+                    global latest_robot_right_pwm
                     with state_lock:
                         latest_control_enabled = parts[1] == "1"
                         latest_black_stop = parts[2] == "1"
+                        if len(parts) == 5:
+                            try:
+                                latest_robot_left_pwm = int(parts[3])
+                                latest_robot_right_pwm = int(parts[4])
+                            except ValueError:
+                                response = "ERROR invalid motor status\n"
+                                conn.sendall(response.encode())
+                                continue
                         latest_robot_status_time = time.monotonic()
-                    response = get_latest_motor_command_text()
+                    response = get_latest_motor_command_text(
+                        include_black_threshold=len(parts) == 5
+                    )
                 elif request == "GET":
                     # 旧クライアントとの互換性を維持する。
                     response = get_latest_motor_command_text()
@@ -450,23 +499,21 @@ def tcp_server_loop():
 # 描画
 # ============================================================
 
-def draw_debug_view(frame_bgr, marker, cmd, processing_ms):
+def draw_debug_view(frame_bgr, marker, cmd, processing_ms, deadzone=DEADZONE_DEFAULT):
     view = frame_bgr.copy()
 
     image_cx = int(WIDTH / 2)
     image_cy = int(HEIGHT / 2)
 
-    # 画像中心と有効半径
-    cv2.circle(view, (image_cx, image_cy), 4, (255, 0, 0), -1)
-    cv2.circle(view, (image_cx, image_cy), int(ACTIVE_RADIUS), (255, 0, 0), 1)
-
-    # デッドゾーン
+    # 画像中心とデッドゾーン。以前の大きな有効半径の円は停止範囲との
+    # 誤解を招くため表示せず、青い円を実際の停止範囲だけにする。
+    cv2.circle(view, (image_cx, image_cy), 3, (255, 255, 255), -1)
     cv2.circle(
         view,
         (image_cx, image_cy),
-        int(ACTIVE_RADIUS * DEADZONE),
-        (100, 100, 255),
-        1
+        int(ACTIVE_RADIUS * deadzone),
+        (255, 0, 0),
+        2
     )
 
     if marker is None:
@@ -548,6 +595,20 @@ def draw_debug_view(frame_bgr, marker, cmd, processing_ms):
     return view
 
 
+def make_marker_only_frame(frame_bgr, marker):
+    """Web表示用に、検出した赤・緑マーカー以外を黒く隠す。"""
+    marker_mask = np.zeros(frame_bgr.shape[:2], dtype=np.uint8)
+    if marker is not None:
+        cv2.drawContours(
+            marker_mask,
+            [marker.red.contour, marker.green.contour],
+            -1,
+            255,
+            cv2.FILLED,
+        )
+    return cv2.bitwise_and(frame_bgr, frame_bgr, mask=marker_mask)
+
+
 # ============================================================
 # メイン
 # ============================================================
@@ -575,9 +636,6 @@ def vision_loop():
     # 露出やホワイトバランスが落ち着くのを待つ
     time.sleep(1.0)
 
-    last_seen_time = 0.0
-    last_cmd = stop_command()
-
     print("marker detection started")
 
     try:
@@ -586,28 +644,27 @@ def vision_loop():
 
             # RGB888 というフォーマット名に反して、配列のチャンネル順は
             # OpenCV と同じ BGR。RGB とみなして入れ替えると赤と青が反転する。
-            frame_bgr = picam2.capture_array()
+            frame_bgr = orient_camera_frame(picam2.capture_array())
 
             marker, red_mask, green_mask = detect_marker(frame_bgr)
 
-            now = time.perf_counter()
+            with state_lock:
+                speed_gain = latest_speed_gain
+                deadzone = latest_deadzone
 
             if marker is not None:
-                cmd = calculate_motor_command(marker)
-                last_seen_time = now
-                last_cmd = cmd
+                cmd = calculate_motor_command(marker, speed_gain, deadzone)
             else:
-                # 一瞬見失っただけなら直前値を少しだけ保持してもよい。
-                # 安全寄りにするなら即停止でもよい。
-                if now - last_seen_time <= LOST_TIMEOUT_SEC:
-                    cmd = last_cmd
-                else:
-                    cmd = stop_command()
+                # どちらかのマーカーを見失ったら、直前値を保持せず即停止する。
+                cmd = stop_command()
 
             send_motor_command(cmd)
 
             processing_ms = (time.perf_counter() - loop_t0) * 1000.0
-            view = draw_debug_view(frame_bgr, marker, cmd, processing_ms)
+            privacy_frame = make_marker_only_frame(frame_bgr, marker)
+            view = draw_debug_view(
+                privacy_frame, marker, cmd, processing_ms, deadzone
+            )
 
             with state_lock:
                 latest_frame = view
@@ -674,6 +731,12 @@ def index():
     .status-card.safety { background: #edf0ee; }
     .status-card.safety.active { background: #fbe2df; }
     .status-card.safety.active .card-value { color: #a83a32; }
+    .tuning { grid-column: 1 / -1; padding: 18px; border-radius: 20px; background: #f2ecff; }
+    .tuning-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+    .tuning-title { margin: 0; font-size: 1.05rem; font-weight: 900; }
+    .gain-value { color: #7048a8; font-size: 1.35rem; font-weight: 900; }
+    .gain-slider { width: 100%; margin: 14px 0 6px; accent-color: #7048a8; }
+    .pwm-readout { margin: 9px 0 0; font-family: ui-monospace, Consolas, monospace; font-weight: 800; }
     .card-label { margin: 0 0 10px; color: var(--muted); font-size: .83rem; font-weight: 800; }
     .card-value { margin: 0; font-size: clamp(1.35rem, 2.5vw, 2rem); font-weight: 900; line-height: 1.2; }
     .detect .card-value { color: #19784c; }
@@ -727,6 +790,20 @@ def index():
         <article id="motion-card" class="status-card motion"><span id="motion-icon" class="icon" aria-hidden="true">■</span><p class="card-label">ロボット</p><p id="motion" class="card-value">ストップ！</p><p id="motion-note" class="card-note">ぬいぐるみを待っています</p></article>
         <article id="control-card" class="status-card control"><span id="control-icon" class="icon" aria-hidden="true">—</span><p class="card-label">フォースセンサ</p><p id="control" class="card-value">状態不明</p><p id="control-note" class="card-note">ロボットからの通信を待っています</p></article>
         <article id="safety-card" class="status-card safety"><span id="safety-icon" class="icon" aria-hidden="true">—</span><p class="card-label">黒線ストップ</p><p id="safety" class="card-value">状態不明</p><p id="safety-note" class="card-note">ロボットからの通信を待っています</p></article>
+        <section class="status-card tuning" aria-labelledby="gain-title">
+          <div class="tuning-head"><h2 id="gain-title" class="tuning-title">モータ感度</h2><output id="gain-value" class="gain-value" for="gain">1.50 倍</output></div>
+          <input id="gain" class="gain-slider" type="range" min="0.5" max="6.0" step="0.1" value="1.5" aria-describedby="gain-note">
+          <p id="gain-note" class="card-note">大きくすると、同じぬいぐるみ操作でもモータ指令が強くなります。</p>
+          <div class="tuning-head"><label for="deadzone" class="tuning-title">中央の停止範囲</label><output id="deadzone-value" class="gain-value" for="deadzone">5%</output></div>
+          <input id="deadzone" class="gain-slider" type="range" min="0" max="0.30" step="0.01" value="0.05">
+          <p class="card-note">小さくすると、中央から少し動かしただけで前進・後退します。</p>
+          <div class="tuning-head"><label for="black-threshold" class="tuning-title">黒線の判定値</label><output id="black-threshold-value" class="gain-value" for="black-threshold">8</output></div>
+          <input id="black-threshold" class="gain-slider" type="range" min="0" max="100" step="1" value="8">
+          <p class="card-note">薄茶色で停止する場合は小さくします。小さすぎると黒線を見逃すため、実際の床で確認してください。</p>
+          <p id="pwm-readout" class="pwm-readout">計算PWM: L=0 / R=0</p>
+          <p id="robot-pwm-readout" class="pwm-readout">ロボット適用PWM: 通信待ち</p>
+          <p class="card-note">※ 計算した指令値です。モータが実際に回転したことを検知する表示ではありません。</p>
+        </section>
       </div>
     </section>
 
@@ -755,6 +832,7 @@ def index():
     (() => {
       const $ = id => document.getElementById(id);
       let previous = {};
+      let settingsEditing = false, settingsTimer;
       const setCard = (id, value) => {
         const el = $(id); if (el.textContent === value) return;
         el.textContent = value; const card = $(id + '-card');
@@ -778,7 +856,7 @@ def index():
           const controlEnabled = robotFresh && data.control_enabled === true;
           const blackStop = robotFresh && data.black_stop === true;
           const moving = Math.max(Math.abs(left), Math.abs(right)) > 1 && controlEnabled && !blackStop;
-          const strength = Math.max(0, Number(data.strength) || 0);
+          const strength = Math.max(Math.abs(left), Math.abs(right)) / (Number(data.pwm_max) || 100);
           const [directionText, directionIcon] = direction(Number(data.theta_deg) || 0);
 
           setCard('detect', found ? 'みつけたよ！' : 'さがしています…');
@@ -804,11 +882,43 @@ def index():
           $('raw-processing').textContent = number(data.processing_ms, 1) + (Number.isFinite(Number(data.processing_ms)) ? ' ms' : '');
           $('raw-control').textContent = robotFresh ? String(data.control_enabled) : '—';
           $('raw-black-stop').textContent = robotFresh ? String(data.black_stop) : '—';
+          $('pwm-readout').textContent = `計算PWM: L=${left} / R=${right}`;
+          const robotLeft = Number(data.robot_left_pwm), robotRight = Number(data.robot_right_pwm);
+          $('robot-pwm-readout').textContent = robotFresh && Number.isFinite(robotLeft) && Number.isFinite(robotRight)
+            ? `ロボット適用PWM: L=${robotLeft} / R=${robotRight}` : 'ロボット適用PWM: 通信待ち';
+          if (!settingsEditing) {
+            $('gain').value = Number(data.speed_gain).toFixed(1);
+            $('gain-value').textContent = Number(data.speed_gain).toFixed(2) + ' 倍';
+            $('deadzone').value = Number(data.deadzone).toFixed(2);
+            $('deadzone-value').textContent = Math.round(Number(data.deadzone) * 100) + '%';
+            $('black-threshold').value = String(data.black_threshold);
+            $('black-threshold-value').textContent = String(data.black_threshold);
+          }
           $('connection').classList.remove('offline'); $('connection').lastElementChild.textContent = 'つながっています';
           previous = data;
         } catch (error) {
           $('connection').classList.add('offline'); $('connection').lastElementChild.textContent = 'つなぎ直しています…';
         }
+      }
+      const saveSettings = async () => {
+        const gain = Number($('gain').value), deadzone = Number($('deadzone').value);
+        const blackThreshold = Number($('black-threshold').value);
+        $('gain-value').textContent = gain.toFixed(2) + ' 倍';
+        $('deadzone-value').textContent = Math.round(deadzone * 100) + '%';
+        $('black-threshold-value').textContent = String(blackThreshold);
+        clearTimeout(settingsTimer);
+        settingsTimer = setTimeout(async () => {
+          try {
+            const response = await fetch('/settings', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ speed_gain: gain, deadzone, black_threshold: blackThreshold })
+            });
+            if (!response.ok) throw new Error(response.status);
+          } finally { settingsEditing = false; }
+        }, 180);
+      };
+      for (const id of ['gain', 'deadzone', 'black-threshold']) {
+        $(id).addEventListener('input', () => { settingsEditing = true; saveSettings(); });
       }
       update(); setInterval(update, 600);
     })();
@@ -827,6 +937,11 @@ def status():
         control_enabled = latest_control_enabled
         black_stop = latest_black_stop
         robot_status_time = latest_robot_status_time
+        speed_gain = latest_speed_gain
+        deadzone = latest_deadzone
+        robot_left_pwm = latest_robot_left_pwm
+        robot_right_pwm = latest_robot_right_pwm
+        black_threshold = latest_black_threshold
 
     robot_status_fresh = time.monotonic() - robot_status_time <= 1.0
 
@@ -835,11 +950,66 @@ def status():
         "left_pwm": 0 if cmd is None else cmd.left_pwm,
         "right_pwm": 0 if cmd is None else cmd.right_pwm,
         "strength": 0.0 if cmd is None else cmd.strength,
+        "forward": 0.0 if cmd is None else cmd.forward,
+        "turn": 0.0 if cmd is None else cmd.turn,
         "theta_deg": 0.0 if cmd is None else cmd.theta_deg,
         "processing_ms": processing_ms,
         "control_enabled": control_enabled if robot_status_fresh else None,
         "black_stop": black_stop if robot_status_fresh else None,
         "robot_status_fresh": robot_status_fresh,
+        "speed_gain": speed_gain,
+        "pwm_max": PWM_MAX,
+        "deadzone": deadzone,
+        "robot_left_pwm": robot_left_pwm if robot_status_fresh else None,
+        "robot_right_pwm": robot_right_pwm if robot_status_fresh else None,
+        "black_threshold": black_threshold,
+    })
+
+
+@app.post("/settings")
+def settings():
+    """Web画面からモータ出力倍率を安全な範囲で更新する。"""
+    payload = request.get_json(silent=True) or {}
+    if not ({"speed_gain", "deadzone", "black_threshold"} & payload.keys()):
+        return jsonify({"error": "no supported setting supplied"}), 400
+
+    def validated_number(name, current, low, high):
+        if name not in payload:
+            return current
+        try:
+            value = float(payload[name])
+        except (TypeError, ValueError):
+            raise ValueError(f"{name} must be a number")
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite")
+        return clip(value, low, high)
+
+    global latest_speed_gain
+    global latest_deadzone
+    global latest_black_threshold
+    with state_lock:
+        try:
+            speed_gain = validated_number(
+                "speed_gain", latest_speed_gain, SPEED_GAIN_MIN, SPEED_GAIN_MAX
+            )
+            deadzone = validated_number(
+                "deadzone", latest_deadzone, DEADZONE_MIN, DEADZONE_MAX
+            )
+            black_threshold = validated_number(
+                "black_threshold",
+                latest_black_threshold,
+                BLACK_THRESHOLD_MIN,
+                BLACK_THRESHOLD_MAX,
+            )
+        except ValueError as error:
+            return jsonify({"error": str(error)}), 400
+        latest_speed_gain = speed_gain
+        latest_deadzone = deadzone
+        latest_black_threshold = int(round(black_threshold))
+    return jsonify({
+        "speed_gain": speed_gain,
+        "deadzone": deadzone,
+        "black_threshold": latest_black_threshold,
     })
 
 
