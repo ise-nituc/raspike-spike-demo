@@ -331,8 +331,10 @@ def calculate_motor_command(
     strength = max(abs(forward), abs(turn))
 
     # 差動二輪への変換
-    left = speed_gain * (forward - TURN_GAIN * turn)
-    right = speed_gain * (forward + TURN_GAIN * turn)
+    # 右旋回は左を正、右を負にする。前後成分とは独立しているため、
+    # マーカーが中央にあっても left=+N, right=-N のその場旋回になる。
+    left = speed_gain * (forward + TURN_GAIN * turn)
+    right = speed_gain * (forward - TURN_GAIN * turn)
 
     # 比率を保って -1.0〜+1.0 に収める
     left, right = normalize_motor_pair(left, right)

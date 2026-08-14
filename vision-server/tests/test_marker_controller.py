@@ -51,8 +51,10 @@ def test_twisting_marker_turns_even_at_image_center():
     )
 
     assert right.forward == left.forward == 0
-    assert right.left_pwm < 0 < right.right_pwm
-    assert left.right_pwm < 0 < left.left_pwm
+    assert right.right_pwm < 0 < right.left_pwm
+    assert left.left_pwm < 0 < left.right_pwm
+    assert right.left_pwm == -right.right_pwm
+    assert left.left_pwm == -left.right_pwm
 
 
 def test_output_rises_quickly_after_forward_deadzone():
