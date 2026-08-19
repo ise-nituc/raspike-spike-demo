@@ -1,5 +1,8 @@
 # Raspike-ART デモ環境のダッシュボード化案
 
+> **注記:** この文書は初期設計案です。現在の実装仕様と運用手順は
+> [`README.md`](../README.md) と [`scripts/README.md`](../scripts/README.md) を参照してください。
+
 ## 1. 目標と利用手順
 
 教員がターミナルを操作せず、次の手順だけでデモを開始できる状態を目標とします。
@@ -7,7 +10,7 @@
 1. Raspberry Pi と SPIKE Prime の電源を入れる。
 2. PC またはタブレットを、Raspberry Pi の Wi-Fi（例: `Raspike-Demo-XXXX`）へ接続する。
 3. ブラウザで `http://raspike.local/` を開く。名前解決できない端末では
-   `http://192.168.60.1/` を開く。
+   AP 側 IP（Robot ID `NN` に対して `192.168.60.(100+NN)`）を使って開く。
 4. ダッシュボードでプログラムを選び、「実行」または「停止」を押す。
 
 既存の `scripts/net-ap`、`scripts/start-*` を手動実行する方式は、開発・復旧用として
@@ -57,13 +60,16 @@ sudo nmcli connection modify raspike-ap \
   802-11-wireless.mode ap \
   802-11-wireless.band bg \
   ipv4.method shared \
-  ipv4.addresses 192.168.60.1/24 \
+  ipv4.addresses 192.168.60.104/24 \
   ipv6.method disabled \
   wifi-sec.key-mgmt wpa-psk \
   wifi-sec.psk '<十分に長いパスフレーズ>'
 sudo nmcli connection modify netplan-wlan0-isepr connection.autoconnect no
 sudo nmcli connection up raspike-ap
 ```
+
+上記は Robot ID `04` の例です。現在仕様では Robot ID `NN` ごとに
+`192.168.60.(100+NN)/24` を設定します。
 
 `band bg`（2.4 GHz）は端末互換性を優先した案です。会場の混雑状況に合わせてチャネルを
 固定する場合は、事前に現地で確認します。SSID は複数台を識別できるよう、筐体ラベルと

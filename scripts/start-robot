@@ -3,24 +3,47 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SDK_WORKSPACE="${HOME}/RasPike-ART/sdk/workspace"
+LOCK_FILE="${REPO_DIR}/var/run/robot.lock"
+APP_NAME="${1:-}"
+STATUS_FILE="${REPO_DIR}/var/run/robot-${APP_NAME:-appdir}.status"
 
 if [ ! -d "${SDK_WORKSPACE}" ]; then
     echo "error: RasPike-ART workspace not found: ${SDK_WORKSPACE}" >&2
     exit 1
 fi
-
 if [ "$#" -gt 1 ]; then
     echo "usage: $0 [robot-application-name]" >&2
     exit 1
 fi
+if [ -n "${APP_NAME}" ] && [[ ! "${APP_NAME}" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    echo "error: invalid application name: ${APP_NAME}" >&2
+    exit 1
+fi
+
+write_status() {
+    local temporary="${STATUS_FILE}.$$"
+    printf '%s\n' "$1" > "${temporary}"
+    mv "${temporary}" "${STATUS_FILE}"
+}
+on_error() {
+    write_status error
+}
+trap on_error ERR
+
+mkdir -p "$(dirname "${LOCK_FILE}")"
+exec 9>"${LOCK_FILE}"
+flock 9
 
 if [ "$#" -eq 1 ]; then
-    # 実行対象を曖昧にしないため、指定されたアプリを正常にビルドしてから起動する。
-    "${REPO_DIR}/scripts/build-robot" "$1"
+    RASPIKE_ROBOT_LOCK_HELD=1 RASPIKE_STATUS_FILE="${STATUS_FILE}" \
+        "${REPO_DIR}/scripts/build-robot" "$1"
+    write_status ready
 else
     echo "[start-robot] no application specified; starting the existing asp binary"
 fi
 
+write_status running
+trap - ERR
 echo "[start-robot] starting robot program..."
 cd "${SDK_WORKSPACE}"
 exec make start

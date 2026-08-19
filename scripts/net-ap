@@ -3,14 +3,35 @@ set -euo pipefail
 
 AP_CONN="raspike-ap"
 WIFI_CONN="netplan-wlan0-isepr"
+ID_FILE="/etc/raspike-id"
 
 echo "Switching to AP mode..."
 
 sudo nmcli connection down "${WIFI_CONN}" 2>/dev/null || true
 sudo nmcli connection up "${AP_CONN}"
 
+AP_SSID=""
+AP_IP=""
+if [[ -r "${ID_FILE}" ]]; then
+  AP_SSID=$(awk -F= '$1 == "ap_ssid" {print substr($0, index($0, "=") + 1); exit}' "${ID_FILE}")
+  AP_IP=$(awk -F= '$1 == "ap_ip" {print substr($0, index($0, "=") + 1); exit}' "${ID_FILE}")
+fi
+
+# Fall back to the active NetworkManager/runtime values without guessing an address.
+[[ -n "${AP_SSID}" ]] || AP_SSID=$(nmcli -g 802-11-wireless.ssid connection show "${AP_CONN}" 2>/dev/null || true)
+[[ -n "${AP_IP}" ]] || AP_IP=$(ip -4 -o address show dev wlan0 scope global 2>/dev/null | awk 'NR == 1 {print $4}')
+AP_IP=${AP_IP%%/*}
+
 echo
 echo "AP mode is active."
-echo "Connect from PC:"
-echo "  ssh iot@192.168.60.1"
-echo "  http://192.168.60.1:8082/"
+if [[ -n "${AP_SSID}" ]]; then
+  echo "SSID: ${AP_SSID}"
+else
+  echo "SSID: unavailable (check: nmcli connection show ${AP_CONN})"
+fi
+if [[ -n "${AP_IP}" ]]; then
+  echo "ssh iot@${AP_IP}"
+  echo "http://${AP_IP}:8082/"
+else
+  echo "AP IP: unavailable (check: ip -4 address show dev wlan0)"
+fi

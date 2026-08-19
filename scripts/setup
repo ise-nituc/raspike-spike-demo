@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly ETH_CONN="raspike-eth"
+readonly AP_CONN="raspike-ap"
+readonly ETH_IF="eth0"
+readonly WLAN_IF="wlan0"
+readonly ID_FILE="/etc/raspike-id"
+
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
+
+[[ $# -eq 1 ]] || die "usage: $0 NN (NN must be 01..99)"
+[[ $1 =~ ^(0[1-9]|[1-9][0-9])$ ]] || die "NN must be exactly two digits from 01 through 99"
+
+readonly ROBOT_ID="$1"
+readonly HOSTNAME_NEW="IoT${ROBOT_ID}"
+readonly HOST_OCTET=$((10#$ROBOT_ID + 100))
+readonly ETH_IP="192.168.50.${HOST_OCTET}/24"
+readonly AP_SSID="iot${ROBOT_ID}"
+readonly AP_IP="192.168.60.${HOST_OCTET}/24"
+
+need sudo
+need nmcli
+need hostnamectl
+need hostname
+need ip
+need awk
+need sed
+need mktemp
+need grep
+need find
+need install
+sudo -v
+
+[[ $(nmcli -t -f DEVICE device status | grep -Fx "$ETH_IF" | wc -l) -eq 1 ]] || die "device $ETH_IF was not found"
+[[ $(nmcli -t -f DEVICE device status | grep -Fx "$WLAN_IF" | wc -l) -eq 1 ]] || die "device $WLAN_IF was not found"
+
+mapfile -t AP_UUIDS < <(nmcli -t -f NAME,UUID connection show | awk -F: -v n="$AP_CONN" '$1 == n {print $2}')
+(( ${#AP_UUIDS[@]} == 1 )) || die "expected exactly one '$AP_CONN' connection; found ${#AP_UUIDS[@]}"
+readonly AP_UUID="${AP_UUIDS[0]}"
+[[ $(nmcli -g connection.type connection show uuid "$AP_UUID") == "802-11-wireless" ]] || die "'$AP_CONN' is not a Wi-Fi connection"
+
+mapfile -t ETH_UUIDS < <(nmcli -t -f NAME,UUID connection show | awk -F: -v n="$ETH_CONN" '$1 == n {print $2}')
+(( ${#ETH_UUIDS[@]} <= 1 )) || die "multiple '$ETH_CONN' connections exist; resolve them manually first"
+if (( ${#ETH_UUIDS[@]} == 1 )); then
+  [[ $(nmcli -g connection.type connection show uuid "${ETH_UUIDS[0]}") == "802-3-ethernet" ]] || die "'$ETH_CONN' is not an Ethernet connection"
+fi
+
+OLD_ID=""
+if sudo test -r "$ID_FILE"; then
+  OLD_ID=$(sudo awk -F= '$1 == "id" {print $2; exit}' "$ID_FILE")
+fi
+CLONE_CHANGE=false
+if [[ -n "$OLD_ID" && "$OLD_ID" != "$ROBOT_ID" ]]; then
+  CLONE_CHANGE=true
+fi
+
+cat <<EOF
+The following persistent settings will be written (connections will not be activated now):
+  Robot ID:  $ROBOT_ID
+  hostname:  $HOSTNAME_NEW
+  Wired:     $ETH_CONN on $ETH_IF, $ETH_IP
+  AP:        $AP_CONN on $WLAN_IF, SSID $AP_SSID, $AP_IP
+  Clone identity regeneration: $CLONE_CHANGE (current recorded ID: ${OLD_ID:-not recorded})
+
+Unrelated connections, including netplan-wlan0-isepr, will not be changed or deleted.
+EOF
+read -r -p "Apply these changes? [y/N] " answer
+[[ "$answer" == "y" || "$answer" == "Y" ]] || { echo "Cancelled."; exit 0; }
+
+work_dir=$(mktemp -d)
+committed=false
+old_hostname=$(hostnamectl --static)
+cleanup() {
+  local status=$?
+  if [[ "$committed" != true ]]; then
+    echo "Setup did not complete; restoring backed-up identity files." >&2
+    sudo hostnamectl set-hostname "$old_hostname" 2>/dev/null || true
+    sudo cp -a "$work_dir/hosts" /etc/hosts 2>/dev/null || true
+    if [[ -e "$work_dir/raspike-id" ]]; then sudo cp -a "$work_dir/raspike-id" "$ID_FILE" 2>/dev/null || true; else sudo rm -f "$ID_FILE"; fi
+    if [[ -e "$work_dir/machine-id" ]]; then sudo cp -a "$work_dir/machine-id" /etc/machine-id 2>/dev/null || true; fi
+    if [[ -e "$work_dir/dbus-machine-id" ]]; then sudo cp -a "$work_dir/dbus-machine-id" /var/lib/dbus/machine-id 2>/dev/null || true; fi
+    if [[ -d "$work_dir/ssh" ]]; then sudo cp -a "$work_dir/ssh/"ssh_host_* /etc/ssh/ 2>/dev/null || true; fi
+  fi
+  sudo rm -rf "$work_dir"
+  exit "$status"
+}
+trap cleanup EXIT
+
+sudo cp -a /etc/hosts "$work_dir/hosts"
+sudo test -e "$ID_FILE" && sudo cp -a "$ID_FILE" "$work_dir/raspike-id"
+
+# Create one managed Ethernet profile, or update that exact profile by UUID.
+if (( ${#ETH_UUIDS[@]} == 0 )); then
+  sudo nmcli connection add type ethernet ifname "$ETH_IF" con-name "$ETH_CONN" \
+    ipv4.method manual ipv4.addresses "$ETH_IP" ipv6.method auto connection.autoconnect yes \
+    connection.autoconnect-priority 100
+  ETH_UUID=$(nmcli -t -f NAME,UUID connection show | awk -F: -v n="$ETH_CONN" '$1 == n {print $2; exit}')
+else
+  ETH_UUID="${ETH_UUIDS[0]}"
+  sudo nmcli connection modify uuid "$ETH_UUID" connection.interface-name "$ETH_IF" \
+    connection.autoconnect yes connection.autoconnect-priority 100 \
+    ipv4.method manual ipv4.addresses "$ETH_IP" ipv4.gateway "" ipv4.dns ""
+fi
+
+# Modify only identity/address fields. Existing WPA security and secrets remain intact.
+sudo nmcli connection modify uuid "$AP_UUID" connection.interface-name "$WLAN_IF" \
+  connection.autoconnect yes connection.autoconnect-priority 100 \
+  802-11-wireless.mode ap 802-11-wireless.ssid "$AP_SSID" \
+  ipv4.method shared ipv4.addresses "$AP_IP"
+
+sudo hostnamectl set-hostname "$HOSTNAME_NEW"
+sudo sed -i -E "s/^([[:space:]]*127\.0\.1\.1[[:space:]]+).*/\\1${HOSTNAME_NEW}/" /etc/hosts
+grep -Eq '^[[:space:]]*127\.0\.1\.1[[:space:]]+' /etc/hosts || printf '127.0.1.1\t%s\n' "$HOSTNAME_NEW" | sudo tee -a /etc/hosts >/dev/null
+
+sudo install -d -m 0755 /etc/cloud/cloud.cfg.d
+printf 'preserve_hostname: true\n' | sudo tee /etc/cloud/cloud.cfg.d/99-raspike-hostname.cfg >/dev/null
+
+if [[ "$CLONE_CHANGE" == true ]]; then
+  need systemd-machine-id-setup
+  need ssh-keygen
+  sudo cp -a /etc/machine-id "$work_dir/machine-id"
+  sudo test -e /var/lib/dbus/machine-id && sudo cp -a /var/lib/dbus/machine-id "$work_dir/dbus-machine-id"
+  sudo install -d "$work_dir/ssh"
+  sudo find /etc/ssh -maxdepth 1 -type f -name 'ssh_host_*' -exec cp -a {} "$work_dir/ssh/" \;
+  sudo truncate -s 0 /etc/machine-id
+  sudo rm -f /var/lib/dbus/machine-id
+  sudo systemd-machine-id-setup
+  sudo ln -s /etc/machine-id /var/lib/dbus/machine-id
+  sudo find /etc/ssh -maxdepth 1 -type f -name 'ssh_host_*' -delete
+  sudo ssh-keygen -A
+fi
+
+printf '%s\n' \
+  "id=$ROBOT_ID" \
+  "hostname=$HOSTNAME_NEW" \
+  "eth_ip=$ETH_IP" \
+  "ap_ssid=$AP_SSID" \
+  "ap_ip=$AP_IP" \
+  "purpose=RasPike-ART + SPIKE Prime" | sudo tee "$ID_FILE" >/dev/null
+sudo chmod 0644 "$ID_FILE"
+
+committed=true
+cat <<EOF
+
+Setup complete. Reboot to activate the saved network settings.
+  Robot ID: $ROBOT_ID
+  hostname: $HOSTNAME_NEW
+  Wired IP: $ETH_IP
+  AP SSID:  $AP_SSID
+  AP IP:    $AP_IP
+
+Wired:
+ssh iot@${ETH_IP%/*}
+http://${ETH_IP%/*}:8082/
+
+Access Point:
+SSID: $AP_SSID
+ssh iot@${AP_IP%/*}
+http://${AP_IP%/*}:8082/
+EOF
+
+echo
+echo "Current runtime information (saved network settings take effect after reboot):"
+echo "  hostname: $(hostname)"
+echo "  eth0:     $(ip -4 -br address show "$ETH_IF" 2>/dev/null || true)"
+echo "  wlan0:    $(ip -4 -br address show "$WLAN_IF" 2>/dev/null || true)"
+
+if [[ "$CLONE_CHANGE" == true ]]; then
+  cat <<EOF
+
+SSH host keys were regenerated. If a client reports a host-key conflict, run:
+  ssh-keygen -R ${ETH_IP%/*}
+  ssh-keygen -R ${AP_IP%/*}
+  ssh-keygen -R $HOSTNAME_NEW
+  ssh-keygen -R ${HOSTNAME_NEW}.local
+EOF
+fi
+
+read -r -p "Reboot now? [y/N] " reboot_answer
+case "$reboot_answer" in
+  y|Y|yes|YES)
+    echo "Rebooting..."
+    sudo reboot
+    ;;
+  *)
+    echo "Reboot later with: sudo reboot"
+    ;;
+esac
