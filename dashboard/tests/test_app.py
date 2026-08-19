@@ -152,6 +152,15 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(["journalctl", "--unit", "raspike-marker-controller.service", "--lines", "300", "--no-pager"], self.commands.calls)
 
+    def test_direct_pwm_does_not_force_a_camera_server(self):
+        unit_path = (
+            Path(__file__).resolve().parents[1]
+            / "systemd/raspike-direct-pwm-camera.service.in"
+        )
+        unit = unit_path.read_text(encoding="utf-8")
+        self.assertNotIn("Requires=raspike-marker-controller.service", unit)
+        self.assertNotIn("After=raspike-marker-controller.service", unit)
+
 
 if __name__ == "__main__":
     unittest.main()

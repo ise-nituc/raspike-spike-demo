@@ -1,7 +1,6 @@
 [Unit]
 Description=Raspike direct PWM camera robot
-After=raspike-marker-controller.service
-Requires=raspike-marker-controller.service
+After=network.target
 Conflicts=raspike-line-trace-camera.service raspike-ocan2026.service
 
 [Service]
