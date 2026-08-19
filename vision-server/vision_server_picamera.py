@@ -9,7 +9,7 @@ from picamera2 import Picamera2
 
 from detect_line import estimate_steering, draw_debug
 
-from line_control import LineTraceSettings, calculate_motor_pwm
+from line_control import LineTraceSettings, calculate_motor_pwm, parse_pwm_request
 
 HOST = "127.0.0.1"
 PORT = 65432
@@ -133,47 +133,53 @@ def vision_loop():
         picam2.stop()
 
 
-def get_latest_motor_command_text():
-    """
-    direct_pwm_camera 用の左右PWM値を ``left:right`` 形式で返す。
-    """
+def get_latest_motor_command_text(include_stop_threshold=False):
+    """direct_pwm_camera 用の最新制御値を返す。"""
     with lock:
         left_pwm = latest_left_pwm
         right_pwm = latest_right_pwm
 
-    return f"{left_pwm}:{right_pwm}\n"
+    pwm_text = f"{left_pwm}:{right_pwm}"
+    if include_stop_threshold:
+        threshold = settings_store.get()["stop_reflection_threshold"]
+        return f"{pwm_text}:{threshold}\n"
+    return f"{pwm_text}\n"
+
 
 def handle_client(conn, addr):
     """
-    TCPクライアントからの問い合わせに応答する。
-    RasPike側から "GET" を送ると最新の判定値を返す。
-    接続は維持し、複数回のGETに応答する。
+    新クライアントの状態付きGETと、旧クライアントのGETの両方に応答する。
     """
+    receive_buffer = b""
+
     with conn:
         conn.settimeout(1.0)
 
         while True:
             try:
                 data = conn.recv(1024)
-
                 if not data:
                     return
+                receive_buffer += data
 
-                request = data.decode(errors="ignore").strip()
+                while b"\n" in receive_buffer:
+                    request_line, receive_buffer = receive_buffer.split(b"\n", 1)
+                    request_text = request_line.decode(errors="ignore").strip()
+                    extended_response = parse_pwm_request(request_text)
 
-                if request == "GET":
-                    response = get_latest_motor_command_text()
-                else:
-                    response = "ERROR unknown command\n"
-
-                conn.sendall(response.encode())
+                    if extended_response is None:
+                        response = "ERROR unknown command\n"
+                    else:
+                        response = get_latest_motor_command_text(
+                            include_stop_threshold=extended_response
+                        )
+                    conn.sendall(response.encode())
 
             except socket.timeout:
                 continue
-
-            except Exception as e:
+            except Exception as error:
                 try:
-                    conn.sendall(f"ERROR {e}\n".encode())
+                    conn.sendall(f"ERROR {error}\n".encode())
                 except Exception:
                     pass
                 return
