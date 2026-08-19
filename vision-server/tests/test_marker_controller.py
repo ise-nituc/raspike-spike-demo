@@ -146,15 +146,20 @@ def test_robot_reports_pwm_applied_by_motor_api(monkeypatch):
     )
     thread.start()
 
-    client.sendall(b"GET 1 0 72 68\n")
-    assert client.recv(32) == (
-        f"0:0:{marker_controller.latest_black_threshold}\n".encode()
+    client.sendall(b"GET 1 0 72 68 120 640 180\n")
+    rgb = marker_controller.latest_rgb_stop
+    assert client.recv(128) == (
+        f"0:0:{marker_controller.latest_stop_mode}:"
+        f"{marker_controller.latest_black_threshold}:"
+        f"{rgb['r_min']}:{rgb['r_max']}:{rgb['g_min']}:{rgb['g_max']}:"
+        f"{rgb['b_min']}:{rgb['b_max']}\n".encode()
     )
     client.close()
     thread.join(timeout=1)
 
     assert marker_controller.latest_robot_left_pwm == 72
     assert marker_controller.latest_robot_right_pwm == 68
+    assert marker_controller.latest_sensor_rgb == (120, 640, 180)
 
 
 def test_settings_endpoint_updates_black_threshold(monkeypatch):
@@ -170,6 +175,27 @@ def test_settings_endpoint_updates_black_threshold(monkeypatch):
     assert response.status_code == 200
     assert response.get_json()["black_threshold"] == 4
     assert marker_controller.latest_black_threshold == 4
+
+
+def test_settings_endpoint_updates_rgb_stop_range(monkeypatch):
+    monkeypatch.setattr(marker_controller, "latest_stop_mode", marker_controller.STOP_MODE_REFLECTION)
+    monkeypatch.setattr(marker_controller, "latest_rgb_stop", marker_controller.RGB_STOP_DEFAULTS.copy())
+    client = marker_controller.app.test_client()
+    response = client.post("/settings", json={
+        "stop_mode": marker_controller.STOP_MODE_RGB,
+        "r_min": 0, "r_max": 300,
+        "g_min": 400, "g_max": 1023,
+        "b_min": 0, "b_max": 300,
+    })
+    assert response.status_code == 200
+    assert response.get_json()["stop_mode"] == marker_controller.STOP_MODE_RGB
+    assert response.get_json()["rgb_stop"]["g_min"] == 400
+
+
+def test_settings_rejects_inverted_rgb_range():
+    client = marker_controller.app.test_client()
+    response = client.post("/settings", json={"r_min": 800, "r_max": 100})
+    assert response.status_code == 400
 
 
 def test_legacy_robot_request_keeps_two_value_response(monkeypatch):

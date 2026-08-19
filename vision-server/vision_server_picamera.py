@@ -9,7 +9,10 @@ from picamera2 import Picamera2
 
 from detect_line import estimate_steering, draw_debug
 
-from line_control import LineTraceSettings, calculate_motor_pwm, parse_pwm_request
+from line_control import (
+    LINE_TRACE_STOP_REFLECTION_THRESHOLD,
+    LineTraceSettings, calculate_motor_pwm, parse_pwm_request,
+)
 
 HOST = "127.0.0.1"
 PORT = 65432
@@ -49,6 +52,12 @@ latest_confidence = 0.0
 latest_count = 0
 latest_time = 0.0
 latest_debug_frame = None
+latest_control_enabled = None
+latest_emergency_stop = None
+latest_robot_status_time = 0.0
+latest_robot_left_pwm = None
+latest_robot_right_pwm = None
+latest_sensor_rgb = None
 
 lock = threading.Lock()
 
@@ -133,28 +142,34 @@ def vision_loop():
         picam2.stop()
 
 
-def get_latest_motor_command_text(include_stop_threshold=False):
+def get_latest_motor_command_text(include_stop_config=False):
     """direct_pwm_camera 用の最新制御値を返す。"""
     with lock:
         left_pwm = latest_left_pwm
         right_pwm = latest_right_pwm
 
     pwm_text = f"{left_pwm}:{right_pwm}"
-    if include_stop_threshold:
-        threshold = settings_store.get()["stop_reflection_threshold"]
-        return f"{pwm_text}:{threshold}\n"
+    if include_stop_config:
+        # mode=0（無効）。黒線走行では本体センサーの黒線で停止させない。
+        return (
+            f"{pwm_text}:0:{LINE_TRACE_STOP_REFLECTION_THRESHOLD}"
+            ":0:1023:0:1023:0:1023\n"
+        )
     return f"{pwm_text}\n"
 
 
 def handle_client(conn, addr):
-    """
-    新クライアントの状態付きGETと、旧クライアントのGETの両方に応答する。
-    """
-    receive_buffer = b""
+    """状態付きGETと旧形式GETの両方に応答する。"""
+    global latest_control_enabled
+    global latest_emergency_stop
+    global latest_robot_status_time
+    global latest_robot_left_pwm
+    global latest_robot_right_pwm
+    global latest_sensor_rgb
 
+    receive_buffer = b""
     with conn:
         conn.settimeout(1.0)
-
         while True:
             try:
                 data = conn.recv(1024)
@@ -170,8 +185,20 @@ def handle_client(conn, addr):
                     if extended_response is None:
                         response = "ERROR unknown command\n"
                     else:
+                        if extended_response:
+                            parts = request_text.split()
+                            with lock:
+                                latest_control_enabled = parts[1] == "1"
+                                latest_emergency_stop = parts[2] == "1"
+                                latest_robot_left_pwm = int(parts[3])
+                                latest_robot_right_pwm = int(parts[4])
+                                latest_sensor_rgb = (
+                                    tuple(int(value) for value in parts[5:8])
+                                    if len(parts) == 8 else None
+                                )
+                                latest_robot_status_time = time.monotonic()
                         response = get_latest_motor_command_text(
-                            include_stop_threshold=extended_response
+                            include_stop_config=extended_response
                         )
                     conn.sendall(response.encode())
 
@@ -219,6 +246,12 @@ def line_trace_settings():
 @app.route("/status")
 def status():
     with lock:
+        control_enabled = latest_control_enabled
+        emergency_stop = latest_emergency_stop
+        robot_status_time = latest_robot_status_time
+        robot_left_pwm = latest_robot_left_pwm
+        robot_right_pwm = latest_robot_right_pwm
+        sensor_rgb = latest_sensor_rgb
         result = {
             "steering": latest_steering,
             "confidence": latest_confidence,
@@ -227,6 +260,15 @@ def status():
             "count": latest_count,
             "timestamp": latest_time,
         }
+    robot_status_fresh = time.monotonic() - robot_status_time <= 1.0
+    result.update({
+        "robot_status_fresh": robot_status_fresh,
+        "control_enabled": control_enabled if robot_status_fresh else None,
+        "emergency_stop": emergency_stop if robot_status_fresh else None,
+        "robot_left_pwm": robot_left_pwm if robot_status_fresh else None,
+        "robot_right_pwm": robot_right_pwm if robot_status_fresh else None,
+        "sensor_rgb": sensor_rgb if robot_status_fresh else None,
+    })
     return jsonify(result)
 
 

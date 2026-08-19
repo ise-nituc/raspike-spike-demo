@@ -3,6 +3,23 @@
 
 #include <stdbool.h>
 
+
+typedef enum {
+    PWM_STOP_DISABLED = 0,
+    PWM_STOP_REFLECTION = 1,
+    PWM_STOP_RGB = 2
+} PwmStopMode;
+
+typedef struct {
+    PwmStopMode mode;
+    int reflection_threshold;
+    int r_min;
+    int r_max;
+    int g_min;
+    int g_max;
+    int b_min;
+    int b_max;
+} PwmStopConfig;
 bool PwmClient_Connect(const char *host, int port);
 void PwmClient_Close(void);
 
@@ -14,6 +31,9 @@ bool PwmClient_Get(
     bool black_stop,
     int applied_left_pwm,
     int applied_right_pwm,
-    int *black_threshold);
+    int sensor_r,
+    int sensor_g,
+    int sensor_b,
+    PwmStopConfig *stop_config);
 
 #endif

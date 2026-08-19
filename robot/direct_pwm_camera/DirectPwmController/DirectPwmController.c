@@ -14,9 +14,7 @@
 #define PWM_SERVER_PORT 65432
 #define MOTOR_POWER_MIN (-100)
 #define MOTOR_POWER_MAX 100
-#define BLACK_REFLECTION_THRESHOLD_DEFAULT 8
-#define REFLECTION_MIN 0
-#define REFLECTION_MAX 100
+#define SENSOR_RGB_MAX 1023
 
 static volatile bool fg_paused = true;
 static pup_motor_t *fg_left_motor = NULL;
@@ -25,7 +23,10 @@ static pup_device_t *fg_color_sensor = NULL;
 static bool fg_server_connected = false;
 static int fg_applied_left_pwm = 0;
 static int fg_applied_right_pwm = 0;
-static int fg_black_threshold = BLACK_REFLECTION_THRESHOLD_DEFAULT;
+static PwmStopConfig fg_stop_config = {
+    PWM_STOP_DISABLED, 0,
+    0, SENSOR_RGB_MAX, 0, SENSOR_RGB_MAX, 0, SENSOR_RGB_MAX
+};
 
 static int clamp_motor_power(int power)
 {
@@ -50,14 +51,26 @@ static void stop_motors(void)
     }
 }
 
-static bool color_sensor_is_black(void)
+static bool color_sensor_should_stop(int reflection, pup_color_rgb_t rgb)
 {
+    if (fg_stop_config.mode == PWM_STOP_DISABLED) {
+        return false;
+    }
     if (fg_color_sensor == NULL) {
         return true;
     }
-
-    return pup_color_sensor_reflection(fg_color_sensor)
-        < fg_black_threshold;
+    if (fg_stop_config.mode == PWM_STOP_REFLECTION) {
+        return reflection < fg_stop_config.reflection_threshold;
+    }
+    if (fg_stop_config.mode == PWM_STOP_RGB) {
+        return rgb.r >= fg_stop_config.r_min
+            && rgb.r <= fg_stop_config.r_max
+            && rgb.g >= fg_stop_config.g_min
+            && rgb.g <= fg_stop_config.g_max
+            && rgb.b >= fg_stop_config.b_min
+            && rgb.b <= fg_stop_config.b_max;
+    }
+    return true;
 }
 
 void DirectPwmController_Configure(
@@ -86,33 +99,35 @@ void direct_pwm_task(intptr_t unused)
 {
     int left_pwm = 0;
     int right_pwm = 0;
-    bool black_stop;
+    int reflection = 0;
+    pup_color_rgb_t rgb = {0, 0, 0};
+    bool emergency_stop;
 
     (void)unused;
 
-    black_stop = color_sensor_is_black();
+    if (fg_color_sensor != NULL) {
+        reflection = pup_color_sensor_reflection(fg_color_sensor);
+        rgb = pup_color_sensor_rgb(fg_color_sensor);
+    }
+    emergency_stop = color_sensor_should_stop(reflection, rgb);
 
     if (!fg_server_connected) {
         fg_server_connected = PwmClient_Connect(PWM_SERVER_HOST, PWM_SERVER_PORT);
     }
 
     if (!fg_server_connected || !PwmClient_Get(
-            &left_pwm, &right_pwm, !fg_paused, black_stop,
+            &left_pwm, &right_pwm, !fg_paused, emergency_stop,
             fg_applied_left_pwm, fg_applied_right_pwm,
-            &fg_black_threshold)) {
+            rgb.r, rgb.g, rgb.b, &fg_stop_config)) {
         fg_server_connected = false;
         stop_motors();
         ext_tsk();
         return;
     }
 
-    if (fg_black_threshold < REFLECTION_MIN) {
-        fg_black_threshold = REFLECTION_MIN;
-    } else if (fg_black_threshold > REFLECTION_MAX) {
-        fg_black_threshold = REFLECTION_MAX;
-    }
-
-    if (fg_paused || black_stop || color_sensor_is_black()) {
+    /* 受信した最新設定でもう一度判定する。 */
+    emergency_stop = color_sensor_should_stop(reflection, rgb);
+    if (fg_paused || emergency_stop) {
         stop_motors();
         ext_tsk();
         return;

@@ -65,6 +65,9 @@ class MotorControlTest(unittest.TestCase):
     def test_current_pwm_request_uses_extended_response(self):
         self.assertTrue(parse_pwm_request("GET 1 0 42 38"))
 
+    def test_current_pwm_request_accepts_sensor_rgb(self):
+        self.assertTrue(parse_pwm_request("GET 1 0 42 38 120 640 180"))
+
     def test_legacy_pwm_request_uses_legacy_response(self):
         self.assertFalse(parse_pwm_request("GET"))
 

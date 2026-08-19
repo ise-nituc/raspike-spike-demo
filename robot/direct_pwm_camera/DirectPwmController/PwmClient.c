@@ -109,28 +109,42 @@ bool PwmClient_Get(
     bool black_stop,
     int applied_left_pwm,
     int applied_right_pwm,
-    int *black_threshold)
+    int sensor_r,
+    int sensor_g,
+    int sensor_b,
+    PwmStopConfig *stop_config)
 {
-    char request[32];
+    char request[96];
     char response[RESPONSE_BUFFER_SIZE];
     int left;
     int right;
-    int threshold;
+    int mode;
+    int reflection;
+    int r_min;
+    int r_max;
+    int g_min;
+    int g_max;
+    int b_min;
+    int b_max;
     char trailing;
+    int parsed;
 
     if (fg_sock < 0 || left_pwm == NULL || right_pwm == NULL
-        || black_threshold == NULL) {
+        || stop_config == NULL) {
         return false;
     }
 
     int request_length = snprintf(
         request,
         sizeof(request),
-        "GET %d %d %d %d\n",
+        "GET %d %d %d %d %d %d %d\n",
         control_enabled ? 1 : 0,
         black_stop ? 1 : 0,
         applied_left_pwm,
-        applied_right_pwm);
+        applied_right_pwm,
+        sensor_r,
+        sensor_g,
+        sensor_b);
 
     if (request_length < 0 || (size_t)request_length >= sizeof(request)
         || !send_all(request, (size_t)request_length)) {
@@ -145,13 +159,34 @@ bool PwmClient_Get(
         return false;
     }
 
-    if (sscanf(response, "%d:%d:%d%c", &left, &right, &threshold, &trailing) != 3) {
+    parsed = sscanf(
+        response,
+        "%d:%d:%d:%d:%d:%d:%d:%d:%d:%d%c",
+        &left, &right, &mode, &reflection,
+        &r_min, &r_max, &g_min, &g_max, &b_min, &b_max, &trailing);
+
+    if (parsed == 10 && mode >= PWM_STOP_DISABLED && mode <= PWM_STOP_RGB) {
+        stop_config->mode = (PwmStopMode)mode;
+        stop_config->reflection_threshold = reflection;
+        stop_config->r_min = r_min;
+        stop_config->r_max = r_max;
+        stop_config->g_min = g_min;
+        stop_config->g_max = g_max;
+        stop_config->b_min = b_min;
+        stop_config->b_max = b_max;
+    } else if (
+        sscanf(response, "%d:%d:%d%c", &left, &right, &reflection, &trailing)
+        == 3
+    ) {
+        /* 旧サーバーは反射率閾値だけを返す。 */
+        stop_config->mode = PWM_STOP_REFLECTION;
+        stop_config->reflection_threshold = reflection;
+    } else {
         printf("PwmClient: parse failed: %s\n", response);
         return false;
     }
 
     *left_pwm = left;
     *right_pwm = right;
-    *black_threshold = threshold;
     return true;
 }

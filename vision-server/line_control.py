@@ -3,6 +3,9 @@ import os
 import threading
 
 
+# 黒線走行では本体カラーセンサーも黒線を見るため、黒検知停止を無効にする。
+LINE_TRACE_STOP_REFLECTION_THRESHOLD = 0
+
 DEFAULT_SETTINGS = {
     "black_value": 40,
     "white_value": 200,
@@ -10,7 +13,6 @@ DEFAULT_SETTINGS = {
     "straight_speed": 45,
     "curve_speed": 25,
     "turn_gain": 55.0,
-    "stop_reflection_threshold": 8,
 }
 
 SETTING_RANGES = {
@@ -20,12 +22,10 @@ SETTING_RANGES = {
     "straight_speed": (0, 100),
     "curve_speed": (0, 100),
     "turn_gain": (0.0, 100.0),
-    "stop_reflection_threshold": (0, 100),
 }
 
 INTEGER_SETTINGS = {
-    "black_value", "white_value", "straight_speed", "curve_speed",
-    "stop_reflection_threshold",
+    "black_value", "white_value", "straight_speed", "curve_speed"
 }
 
 
@@ -91,14 +91,14 @@ def parse_pwm_request(request):
     if parts == ["GET"]:
         return False
     if (
-        len(parts) == 5
+        len(parts) in {5, 8}
         and parts[0] == "GET"
         and parts[1] in {"0", "1"}
         and parts[2] in {"0", "1"}
     ):
         try:
-            int(parts[3])
-            int(parts[4])
+            [int(value) for value in parts[3:]]
         except ValueError:
             return None
         return True
+    return None

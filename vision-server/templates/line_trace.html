@@ -56,7 +56,8 @@
     <section class="status" aria-label="現在の判断">
       <div class="metric card"><span>黒線</span><strong id="line-state">確認中…</strong></div>
       <div class="metric card"><span>ロボットの判断</span><strong id="direction">確認中…</strong></div>
-      <div class="metric card"><span>左右のモーター</span><strong id="motors">L 0 / R 0</strong></div>
+      <div class="metric card"><span>ロボットの状態</span><strong id="robot-state">通信待ち</strong></div>
+      <div class="metric card"><span>PWM（指令／適用）</span><strong id="motors">L 0 / R 0</strong></div>
     </section>
 
     <section class="story" aria-label="仕組み">
@@ -76,7 +77,6 @@
           <label><span>直線の速さ</span>まっすぐな場所での基本速度<input name="straight_speed" type="number" min="0" max="100" required></label>
           <label><span>カーブの速さ</span>急カーブでの基本速度<input name="curve_speed" type="number" min="0" max="100" required></label>
           <label><span>曲がる強さ</span>左右モーターの速度差<input name="turn_gain" type="number" min="0" max="100" step="0.5" required></label>
-          <label><span>停止用黒判定</span>本体光センサーの反射率（0～100）<input name="stop_reflection_threshold" type="number" min="0" max="100" required></label>
         </div>
         <button type="submit">設定を保存</button><span id="message" role="status"></span>
       </form>
@@ -88,7 +88,8 @@
     async function loadSettings(){const values=await(await fetch('/settings')).json();Object.entries(values).forEach(([name,value])=>{if(form.elements[name])form.elements[name].value=value})}
     form.addEventListener('submit',async event=>{event.preventDefault();message.textContent='保存中…';const response=await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(form)))});const result=await response.json();message.textContent=response.ok?'保存しました':result.error;if(response.ok)loadSettings()});
     function direction(steering,confidence){if(confidence<=0)return'停止';if(steering>0.18)return'右へ曲がる →';if(steering<-.18)return'← 左へ曲がる';return'まっすぐ ↑'}
-    async function refreshStatus(){try{const s=await(await fetch('/status')).json();const found=s.confidence>0;const line=document.querySelector('#line-state');line.textContent=found?'見つけた！':'見失いました';line.className=found?'found':'lost';document.querySelector('#direction').textContent=direction(s.steering,s.confidence);document.querySelector('#motors').textContent=`L ${s.left_pwm} / R ${s.right_pwm}`}catch(_){document.querySelector('#line-state').textContent='接続待ち'}}
+    function robotState(s){if(!s.robot_status_fresh)return'通信待ち';if(s.control_enabled===false)return'フォースセンサー待機';if(s.emergency_stop)return'緊急停止中';return'走行中'}
+    async function refreshStatus(){try{const s=await(await fetch('/status')).json();const found=s.confidence>0;const line=document.querySelector('#line-state');line.textContent=found?'見つけた！':'見失いました';line.className=found?'found':'lost';document.querySelector('#direction').textContent=direction(s.steering,s.confidence);document.querySelector('#robot-state').textContent=robotState(s);const applied=s.robot_status_fresh?`L ${s.robot_left_pwm} / R ${s.robot_right_pwm}`:'通信待ち';document.querySelector('#motors').textContent=`L ${s.left_pwm} / R ${s.right_pwm} ／ ${applied}`}catch(_){document.querySelector('#line-state').textContent='接続待ち'}}
     loadSettings();refreshStatus();setInterval(refreshStatus,500);
   </script>
 </body>
