@@ -88,6 +88,7 @@ config/*.env
 config/*.local
 config/*.local.*
 config/private/
+vision-server/line_trace_settings.json
 
 !config/*.env.example
 !config/*.local.example

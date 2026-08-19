@@ -70,3 +70,23 @@ ln -s "$HOME/RasPike-ART/sdk/workspace/appdir" robot/appdir
 引数なしの `start-robot` は既存の `asp`、つまり通常は最後に正常にビルドされたアプリを
 起動します。直前のビルドが失敗した場合は、それより前の `asp` が残る可能性があるため、
 通常はアプリ名を付けた起動を推奨します。
+## ライントレースのWeb調整
+
+`vision_server_picamera.py` と `direct_pwm_camera` を組み合わせると、ブラウザの
+`http://<Raspberry PiのIPアドレス>:8080/` から次の値を走行中に変更できます。
+
+- 黒色・白色の基準値（二値化閾値には両者の中間値を使用）
+- ライン進行方向ベクトルの旋回係数
+- 直線時・カーブ時のベース速度
+- 左右モーターへ加える旋回係数
+
+設定は `vision-server/line_trace_settings.json` に保存され、次回起動時にも使われます。
+操舵量が大きくなるほどベース速度はカーブ時速度へ近づきます。TCPの応答は
+`left:right` 形式なので、この構成では次のように起動してください。
+
+```console
+./scripts/start-vision
+./scripts/start-robot direct_pwm_camera
+```
+
+ラインを検出できない場合や通信に失敗した場合、左右モーターは停止します。
