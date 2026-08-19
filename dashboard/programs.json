@@ -8,8 +8,8 @@
     {
       "id": "vision-server",
       "category": "python",
-      "label": "画像認識サーバー",
-      "description": "カメラ画像から走行ラインを検出し、認識結果を配信します。",
+      "label": "黒線ライントレース（カメラ）",
+      "description": "カメラで床の黒線を見つけ、左右モーターの動きを計算します。起動後にWeb画面で映像と走行設定を確認できます。",
       "unit": "raspike-vision-server.service",
       "web_port": 8080
     },
@@ -24,15 +24,15 @@
     {
       "id": "line-trace-camera",
       "category": "raspike-art",
-      "label": "カメラ・ライントレース",
-      "description": "画像認識サーバーの結果を使ってライントレースします。先に画像認識サーバーを起動してください。",
+      "label": "旧カメラ・ライントレース",
+      "description": "旧形式の操舵値を受け取るロボットプログラムです。現在の黒線ライントレース（カメラ）とは組み合わせられません。",
       "unit": "raspike-line-trace-camera.service"
     },
     {
       "id": "direct-pwm-camera",
       "category": "raspike-art",
-      "label": "カメラ直接PWM制御",
-      "description": "マーカー追従の左右PWM値でロボットを制御します。先にマーカー追従を起動してください。",
+      "label": "カメラ用ロボット制御",
+      "description": "カメラが計算した左右モーター値でロボットを動かします。黒線ライントレースまたはマーカー追従を先に起動してください。",
       "unit": "raspike-direct-pwm-camera.service"
     },
     {

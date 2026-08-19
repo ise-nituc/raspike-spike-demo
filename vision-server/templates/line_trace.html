@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>カメラで黒線を走ろう！</title>
+  <style>
+    :root { color-scheme: dark; --bg:#07111f; --card:#102238; --line:#29435f; --blue:#56b6ff; --green:#65e6a7; --yellow:#ffd166; --text:#f4f8fc; --muted:#aec1d4; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:"Noto Sans JP","Yu Gothic",sans-serif; background:radial-gradient(circle at top,#153653 0,var(--bg) 45%); color:var(--text); }
+    header, main { width:min(1120px,calc(100% - 28px)); margin:auto; }
+    header { padding:36px 0 20px; text-align:center; }
+    .eyebrow { margin:0; color:var(--blue); font-weight:800; letter-spacing:.16em; }
+    h1 { margin:.25em 0; font-size:clamp(2rem,6vw,3.7rem); }
+    .lead { max-width:780px; margin:auto; color:var(--muted); font-size:clamp(1rem,2.3vw,1.25rem); line-height:1.8; }
+    .card { background:rgba(16,34,56,.94); border:1px solid var(--line); border-radius:20px; box-shadow:0 14px 40px #0005; }
+    .camera { padding:14px; overflow:hidden; }
+    .camera img { display:block; width:100%; border-radius:13px; background:#000; }
+    .camera-note { margin:12px 4px 2px; color:var(--muted); text-align:center; }
+    .status { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:16px 0; }
+    .metric { padding:18px; text-align:center; }
+    .metric span { display:block; color:var(--muted); font-size:.9rem; }
+    .metric strong { display:block; margin-top:5px; font-size:clamp(1.25rem,3vw,2rem); }
+    #direction { color:var(--yellow); }
+    #line-state.found { color:var(--green); }
+    #line-state.lost { color:#ff8585; }
+    .story { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:16px 0; }
+    .step { padding:20px; }
+    .step b { display:inline-grid; place-items:center; width:32px; height:32px; margin-right:7px; border-radius:50%; background:var(--blue); color:#042038; }
+    .step p { color:var(--muted); line-height:1.65; margin-bottom:0; }
+    details { margin:16px 0 36px; padding:18px; }
+    summary { cursor:pointer; font-size:1.15rem; font-weight:800; }
+    .help { color:var(--muted); line-height:1.65; }
+    .controls { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin-top:18px; }
+    label { display:grid; gap:6px; color:var(--muted); }
+    label span { color:var(--text); font-weight:700; }
+    input { width:100%; padding:11px; border:1px solid var(--line); border-radius:9px; background:#071526; color:var(--text); font-size:1rem; }
+    button { margin-top:17px; padding:12px 24px; border:0; border-radius:10px; background:var(--blue); color:#042038; font-size:1rem; font-weight:800; cursor:pointer; }
+    #message { display:inline-block; margin-left:12px; color:var(--green); }
+    footer { padding:0 0 30px; color:var(--muted); text-align:center; }
+    @media (max-width:700px) { .status,.story { grid-template-columns:1fr; } .controls { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <p class="eyebrow">CAMERA LINE TRACE</p>
+    <h1>カメラで黒線を走ろう！</h1>
+    <p class="lead">ロボットのカメラが床の黒い線を見つけます。線が曲がると、左右のタイヤの速さを変えてコースに沿って走ります。</p>
+  </header>
+  <main>
+    <section class="camera card" aria-label="カメラが見ている映像">
+      <img src="/video" alt="ロボットのカメラが認識している黒線">
+      <p class="camera-note">黄色い枠の中から黒線を探し、緑の点をつないで進む方向を考えています。</p>
+    </section>
+
+    <section class="status" aria-label="現在の判断">
+      <div class="metric card"><span>黒線</span><strong id="line-state">確認中…</strong></div>
+      <div class="metric card"><span>ロボットの判断</span><strong id="direction">確認中…</strong></div>
+      <div class="metric card"><span>左右のモーター</span><strong id="motors">L 0 / R 0</strong></div>
+    </section>
+
+    <section class="story" aria-label="仕組み">
+      <article class="step card"><h2><b>1</b>見る</h2><p>カメラの画像を明るさの数字に変えて、床と黒線を見分けます。</p></article>
+      <article class="step card"><h2><b>2</b>考える</h2><p>黒線の位置と向きから、まっすぐ・右・左のどちらへ進むか決めます。</p></article>
+      <article class="step card"><h2><b>3</b>動かす</h2><p>左右のタイヤを別々の速さで回します。急カーブでは速度も落とします。</p></article>
+    </section>
+
+    <details class="card">
+      <summary>走り方を調整する（スタッフ向け）</summary>
+      <p class="help">会場の明るさやコースに合わせる設定です。値を変えたら「設定を保存」を押してください。</p>
+      <form id="settings-form">
+        <div class="controls">
+          <label><span>黒色の明るさ</span>実物の黒線に近い値（0～254）<input name="black_value" type="number" min="0" max="254" required></label>
+          <label><span>白色の明るさ</span>実物の床に近い値（1～255）<input name="white_value" type="number" min="1" max="255" required></label>
+          <label><span>線の向きを重視する強さ</span>大きいほどカーブへ早く反応<input name="vector_gain" type="number" min="0" max="4" step="0.05" required></label>
+          <label><span>直線の速さ</span>まっすぐな場所での基本速度<input name="straight_speed" type="number" min="0" max="100" required></label>
+          <label><span>カーブの速さ</span>急カーブでの基本速度<input name="curve_speed" type="number" min="0" max="100" required></label>
+          <label><span>曲がる強さ</span>左右モーターの速度差<input name="turn_gain" type="number" min="0" max="100" step="0.5" required></label>
+        </div>
+        <button type="submit">設定を保存</button><span id="message" role="status"></span>
+      </form>
+    </details>
+  </main>
+  <footer>RasPike カメラ・ライントレースデモ</footer>
+  <script>
+    const form=document.querySelector('#settings-form'), message=document.querySelector('#message');
+    async function loadSettings(){const values=await(await fetch('/settings')).json();Object.entries(values).forEach(([name,value])=>{if(form.elements[name])form.elements[name].value=value})}
+    form.addEventListener('submit',async event=>{event.preventDefault();message.textContent='保存中…';const response=await fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(form)))});const result=await response.json();message.textContent=response.ok?'保存しました':result.error;if(response.ok)loadSettings()});
+    function direction(steering,confidence){if(confidence<=0)return'停止';if(steering>0.18)return'右へ曲がる →';if(steering<-.18)return'← 左へ曲がる';return'まっすぐ ↑'}
+    async function refreshStatus(){try{const s=await(await fetch('/status')).json();const found=s.confidence>0;const line=document.querySelector('#line-state');line.textContent=found?'見つけた！':'見失いました';line.className=found?'found':'lost';document.querySelector('#direction').textContent=direction(s.steering,s.confidence);document.querySelector('#motors').textContent=`L ${s.left_pwm} / R ${s.right_pwm}`}catch(_){document.querySelector('#line-state').textContent='接続待ち'}}
+    loadSettings();refreshStatus();setInterval(refreshStatus,500);
+  </script>
+</body>
+</html>

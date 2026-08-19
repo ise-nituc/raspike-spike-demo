@@ -4,11 +4,12 @@ import threading
 import time
 
 import cv2
-from flask import Flask, Response, render_template_string
+from flask import Flask, Response, jsonify, render_template, request
 from picamera2 import Picamera2
 
 from detect_line import estimate_steering, draw_debug
 
+from line_control import LineTraceSettings, calculate_motor_pwm
 
 HOST = "127.0.0.1"
 PORT = 65432
@@ -35,10 +36,14 @@ WEB_INTERVAL_SEC = 0.1
 WEB_WIDTH = 480
 WEB_HEIGHT = 360
 
+settings_store = LineTraceSettings(os.path.join(os.path.dirname(__file__), "line_trace_settings.json"))
+
 # JPEG品質
 JPEG_QUALITY = 60
 
 
+latest_left_pwm = 0
+latest_right_pwm = 0
 latest_steering = 0.0
 latest_confidence = 0.0
 latest_count = 0
@@ -62,6 +67,8 @@ def vision_loop():
     """
     global latest_steering
     global latest_confidence
+    global latest_left_pwm
+    global latest_right_pwm
     global latest_count
     global latest_time
     global latest_debug_frame
@@ -83,6 +90,7 @@ def vision_loop():
     try:
         while True:
             frame = picam2.capture_array()
+            current_settings = settings_store.get()
 
             if frame is None:
                 steering = 0.0
@@ -90,12 +98,23 @@ def vision_loop():
                 debug = None
             else:
                 # frame は BGR888 なので、そのまま OpenCV 処理へ渡せる
-                steering, confidence,debug_info = estimate_steering(frame)
+                steering, confidence, debug_info = estimate_steering(
+                    frame,
+                    black_value=current_settings["black_value"],
+                    white_value=current_settings["white_value"],
+                    vector_gain=current_settings["vector_gain"],
+                )
                 debug = draw_debug(frame, steering, confidence, debug_info)
+
+            left_pwm, right_pwm = calculate_motor_pwm(
+                steering, confidence, current_settings
+            )
 
             with lock:
                 latest_steering = float(steering)
                 latest_confidence = float(confidence)
+                latest_left_pwm = left_pwm
+                latest_right_pwm = right_pwm
                 latest_count += 1
                 latest_time = time.time()
                 latest_debug_frame = debug
@@ -114,19 +133,15 @@ def vision_loop():
         picam2.stop()
 
 
-def get_latest_result_text():
+def get_latest_motor_command_text():
     """
-    最新の判定値を1行テキストとして返す。
-    形式:
-        steering confidence count timestamp
+    direct_pwm_camera 用の左右PWM値を ``left:right`` 形式で返す。
     """
     with lock:
-        steering = latest_steering
-        confidence = latest_confidence
-        count = latest_count
-        timestamp = latest_time
+        left_pwm = latest_left_pwm
+        right_pwm = latest_right_pwm
 
-    return f"{steering:.6f} {confidence:.6f} {count} {timestamp:.6f}\n"
+    return f"{left_pwm}:{right_pwm}\n"
 
 def handle_client(conn, addr):
     """
@@ -147,7 +162,7 @@ def handle_client(conn, addr):
                 request = data.decode(errors="ignore").strip()
 
                 if request == "GET":
-                    response = get_latest_result_text()
+                    response = get_latest_motor_command_text()
                 else:
                     response = "ERROR unknown command\n"
 
@@ -181,52 +196,32 @@ def tcp_server_loop():
 
 @app.route("/")
 def index():
-    return render_template_string("""
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Line Trace Vision Demo</title>
-  <style>
-    body {
-      font-family: sans-serif;
-      background: #111;
-      color: #eee;
-      text-align: center;
-    }
-    h1 {
-      margin-top: 20px;
-    }
-    img {
-      width: 90%;
-      max-width: 900px;
-      border: 4px solid #555;
-      border-radius: 12px;
-    }
-    .note {
-      font-size: 1.2em;
-      margin: 16px;
-    }
-    .small {
-      color: #aaa;
-      font-size: 0.9em;
-      margin-top: 8px;
-    }
-  </style>
-</head>
-<body>
-  <h1>ETロボコン ライントレース画像認識デモ</h1>
-  <div class="note">
-    Raspberry Pi Camera Module の画像から黒ラインを検出し、
-    旋回方向を推定しています。
-  </div>
-  <img src="/video">
-  <div class="small">
-    Web表示はデモ用に軽量化しています。
-  </div>
-</body>
-</html>
-""")
+    return render_template("line_trace.html")
+
+
+@app.route("/settings", methods=["GET", "POST"])
+def line_trace_settings():
+    if request.method == "GET":
+        return jsonify(settings_store.get())
+    try:
+        values = settings_store.update(request.get_json(force=True) or {})
+    except (ValueError, TypeError, OSError) as error:
+        return jsonify({"error": str(error)}), 400
+    return jsonify(values)
+
+
+@app.route("/status")
+def status():
+    with lock:
+        result = {
+            "steering": latest_steering,
+            "confidence": latest_confidence,
+            "left_pwm": latest_left_pwm,
+            "right_pwm": latest_right_pwm,
+            "count": latest_count,
+            "timestamp": latest_time,
+        }
+    return jsonify(result)
 
 
 @app.route("/video")
@@ -276,6 +271,7 @@ def web_server_loop():
 
 
 def main():
+    settings_store.load()
     vision_thread = threading.Thread(target=vision_loop, daemon=True)
     tcp_thread = threading.Thread(target=tcp_server_loop, daemon=True)
 

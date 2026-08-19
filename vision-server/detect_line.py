@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 
 
-def estimate_steering(image):
+def estimate_steering(image, black_value=40, white_value=200, vector_gain=0.8):
     """
     カメラ画像から旋回量を推定する。
 
@@ -29,8 +29,10 @@ def estimate_steering(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
     # 2. 黒い部分を抽出する
-    # 80より暗い画素を黒線候補とする
-    threshold_value = 80
+    # 実測した黒と白の中間値を判定閾値にする。
+    black_value = int(np.clip(black_value, 0, 254))
+    white_value = int(np.clip(white_value, black_value + 1, 255))
+    threshold_value = int(round((black_value + white_value) / 2.0))
     _, black = cv2.threshold(gray, threshold_value, 255, cv2.THRESH_BINARY_INV)
 
     # 3. 見る範囲を決める
@@ -87,7 +89,12 @@ def estimate_steering(image):
             "image_center": w / 2,
             "dx": 0.0,
             "threshold_value": threshold_value,
+            "black_value": black_value,
+            "white_value": white_value,
             "steering_scale": w * 0.35,
+            "position_steering": 0.0,
+            "vector_steering": 0.0,
+            "vector_gain": vector_gain,
         }
         return 0.0, 0.0, debug_info
 
@@ -101,7 +108,21 @@ def estimate_steering(image):
     dx = x_line - image_center
 
     steering_scale = w * 0.35
-    steering = dx / steering_scale
+    position_steering = dx / steering_scale
+
+    # 上側（進行方向の先）と下側（ロボット寄り）の中心を結ぶ
+    # ラインベクトルの横成分を操舵へ加える。
+    vector_steering = 0.0
+    if len(centers) >= 2:
+        far_index = int(np.argmin(valid_ys))
+        near_index = int(np.argmax(valid_ys))
+        vertical_span = valid_ys[near_index] - valid_ys[far_index]
+        if vertical_span > 0:
+            vector_steering = (
+                (centers[far_index] - centers[near_index]) / vertical_span
+            )
+
+    steering = position_steering + float(vector_gain) * vector_steering
     steering = float(np.clip(steering, -1.0, 1.0))
 
     confidence = len(centers) / len(ys)
@@ -120,7 +141,12 @@ def estimate_steering(image):
         "image_center": image_center,
         "dx": dx,
         "threshold_value": threshold_value,
+        "black_value": black_value,
+        "white_value": white_value,
         "steering_scale": steering_scale,
+        "position_steering": position_steering,
+        "vector_steering": vector_steering,
+        "vector_gain": vector_gain,
     }
 
     return steering, confidence, debug_info
@@ -289,11 +315,16 @@ def draw_debug(image, steering, confidence, debug_info):
     dx = debug_info["dx"]
     threshold_value = debug_info["threshold_value"]
     steering_scale = debug_info["steering_scale"]
+    position_steering = debug_info["position_steering"]
+    vector_steering = debug_info["vector_steering"]
+    vector_gain = debug_info["vector_gain"]
 
     lines = [
         f"steering = {steering:+.2f}",
         f"confidence = {confidence:.2f}",
         f"threshold = {threshold_value}",
+        f"position = {position_steering:+.2f}",
+        f"vector = {vector_steering:+.2f} x {vector_gain:.2f}",
         f"x_line = {x_line:.1f}" if x_line is not None else "x_line = None",
         f"center = {image_center:.1f}",
         f"dx = x_line - center = {dx:+.1f}",
@@ -352,4 +383,4 @@ def draw_debug(image, steering, confidence, debug_info):
         cv2.LINE_AA,
     )
 
-    return debug
+    return debug
