@@ -7,13 +7,16 @@ from dashboard.app import create_app
 
 
 class FakeCommands:
-    def __init__(self):
+    def __init__(self, throttled="throttled=0x0\n"):
         self.calls = []
+        self.throttled = throttled
 
     def __call__(self, argv):
         self.calls.append(argv)
         if argv[:4] == ["sudo", "-n", "systemctl", "show"]:
             return subprocess.CompletedProcess(argv, 0, "inactive\ndead\n", "")
+        if argv == ["vcgencmd", "get_throttled"]:
+            return subprocess.CompletedProcess(argv, 0, self.throttled, "")
         return subprocess.CompletedProcess(argv, 0, "sample log", "")
 
 
@@ -32,6 +35,41 @@ class DashboardTest(unittest.TestCase):
     def test_dashboard_port_comes_from_manifest(self):
         self.assertEqual(self.app.config["DASHBOARD_HOST"], "0.0.0.0")
         self.assertEqual(self.app.config["DASHBOARD_PORT"], 8082)
+
+    def test_system_reports_normal_input_voltage(self):
+        response = self.client.get("/api/system")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["throttled_bits"], 0)
+        self.assertFalse(response.json["under_voltage"])
+        self.assertIn(["vcgencmd", "get_throttled"], self.commands.calls)
+
+    def test_system_reports_current_under_voltage_bit(self):
+        commands = FakeCommands(throttled="throttled=0x50001\n")
+        app = create_app(command_runner=commands, state_dir=self.state_dir)
+        app.config.update(TESTING=True, SECRET_KEY="test")
+        response = app.test_client().get("/api/system")
+        self.assertEqual(response.json["throttled_bits"], 0x50001)
+        self.assertTrue(response.json["under_voltage"])
+
+    def test_system_handles_unavailable_throttling_status(self):
+        commands = FakeCommands(throttled="unexpected output\n")
+        app = create_app(command_runner=commands, state_dir=self.state_dir)
+        app.config.update(TESTING=True, SECRET_KEY="test")
+        response = app.test_client().get("/api/system")
+        self.assertIsNone(response.json["throttled_bits"])
+        self.assertIsNone(response.json["under_voltage"])
+
+    def test_system_handles_missing_vcgencmd(self):
+        def missing_command(argv):
+            if argv == ["vcgencmd", "get_throttled"]:
+                raise FileNotFoundError("vcgencmd")
+            return self.commands(argv)
+
+        app = create_app(command_runner=missing_command, state_dir=self.state_dir)
+        app.config.update(TESTING=True, SECRET_KEY="test")
+        response = app.test_client().get("/api/system")
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json["under_voltage"])
 
     def token(self):
         self.client.get("/")
