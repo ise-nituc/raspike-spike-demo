@@ -55,6 +55,17 @@ DEADZONE_DEFAULT = float(os.environ.get("RASPIKE_DEADZONE", "0.05"))
 DEADZONE_MIN = 0.0
 DEADZONE_MAX = 0.30
 
+
+STOP_MODE_DISABLED = 0
+STOP_MODE_REFLECTION = 1
+STOP_MODE_RGB = 2
+SENSOR_RGB_MIN = 0
+SENSOR_RGB_MAX = 1023
+RGB_STOP_DEFAULTS = {
+    "r_min": 0, "r_max": 350,
+    "g_min": 150, "g_max": 1023,
+    "b_min": 0, "b_max": 450,
+}
 # 走行体の黒線停止に使うカラーセンサー反射光の閾値（0〜100）。
 BLACK_THRESHOLD_DEFAULT = int(os.environ.get("RASPIKE_BLACK_THRESHOLD", "8"))
 BLACK_THRESHOLD_MIN = 0
@@ -103,6 +114,9 @@ latest_black_threshold = max(
 )
 latest_robot_left_pwm = None
 latest_robot_right_pwm = None
+latest_sensor_rgb = None
+latest_stop_mode = STOP_MODE_REFLECTION
+latest_rgb_stop = RGB_STOP_DEFAULTS.copy()
 state_lock = threading.Lock()
 
 app = Flask(__name__)
@@ -402,74 +416,74 @@ def send_motor_command(cmd):
 # RasPike-ART向けTCPサーバ
 # ============================================================
 
-def get_latest_motor_command_text(include_black_threshold=False):
-    """
-    最新の左右PWM値を ``left:right`` 形式の1行テキストとして返す。
-    起動直後など、まだ制御値がない場合は停止値を返す。
-    """
+def get_latest_motor_command_text(include_stop_config=False):
+    """最新の左右PWM値と、必要なら緊急停止設定を返す。"""
     with state_lock:
         cmd = latest_command
         black_threshold = latest_black_threshold
+        stop_mode = latest_stop_mode
+        rgb_stop = latest_rgb_stop.copy()
 
-    if cmd is None:
-        pwm_text = "0:0"
-    else:
-        pwm_text = f"{cmd.left_pwm}:{cmd.right_pwm}"
-
-    if include_black_threshold:
-        return f"{pwm_text}:{black_threshold}\n"
+    pwm_text = "0:0" if cmd is None else f"{cmd.left_pwm}:{cmd.right_pwm}"
+    if include_stop_config:
+        return (
+            f"{pwm_text}:{stop_mode}:{black_threshold}"
+            f":{rgb_stop['r_min']}:{rgb_stop['r_max']}"
+            f":{rgb_stop['g_min']}:{rgb_stop['g_max']}"
+            f":{rgb_stop['b_min']}:{rgb_stop['b_max']}\n"
+        )
     return f"{pwm_text}\n"
 
 
 def handle_tcp_client(conn, addr):
-    """
-    RasPike-ARTからの ``GET`` に対して最新の左右PWM値を返す。
-    接続を維持したまま、改行区切りの複数リクエストを処理する。
-    """
+    """新旧PWMクライアントへ応答し、ロボット状態を保存する。"""
+    global latest_control_enabled
+    global latest_black_stop
+    global latest_robot_status_time
+    global latest_robot_left_pwm
+    global latest_robot_right_pwm
+    global latest_sensor_rgb
+
     print(f"TCP client connected: {addr}")
     receive_buffer = b""
-
     with conn:
         while True:
             data = conn.recv(1024)
             if not data:
                 return
-
             receive_buffer += data
 
             while b"\n" in receive_buffer:
                 request_line, receive_buffer = receive_buffer.split(b"\n", 1)
                 request = request_line.decode(errors="ignore").strip()
-
                 parts = request.split()
+
                 if (
-                    len(parts) in {3, 5}
+                    len(parts) in {3, 5, 8}
                     and parts[0] == "GET"
                     and parts[1] in {"0", "1"}
                     and parts[2] in {"0", "1"}
                 ):
-                    global latest_control_enabled
-                    global latest_black_stop
-                    global latest_robot_status_time
-                    global latest_robot_left_pwm
-                    global latest_robot_right_pwm
+                    try:
+                        numeric_status = [int(value) for value in parts[3:]]
+                    except ValueError:
+                        response = "ERROR invalid robot status\n"
+                        conn.sendall(response.encode())
+                        continue
+
                     with state_lock:
                         latest_control_enabled = parts[1] == "1"
                         latest_black_stop = parts[2] == "1"
-                        if len(parts) == 5:
-                            try:
-                                latest_robot_left_pwm = int(parts[3])
-                                latest_robot_right_pwm = int(parts[4])
-                            except ValueError:
-                                response = "ERROR invalid motor status\n"
-                                conn.sendall(response.encode())
-                                continue
+                        if len(parts) >= 5:
+                            latest_robot_left_pwm = numeric_status[0]
+                            latest_robot_right_pwm = numeric_status[1]
+                        if len(parts) == 8:
+                            latest_sensor_rgb = tuple(numeric_status[2:5])
                         latest_robot_status_time = time.monotonic()
                     response = get_latest_motor_command_text(
-                        include_black_threshold=len(parts) == 5
+                        include_stop_config=len(parts) >= 5
                     )
                 elif request == "GET":
-                    # 旧クライアントとの互換性を維持する。
                     response = get_latest_motor_command_text()
                 else:
                     response = "ERROR unknown command\n"
@@ -757,6 +771,10 @@ def index():
     .datum dt { margin-bottom: 5px; color: var(--muted); font-size: .72rem; overflow-wrap: anywhere; }
     .datum dd { margin: 0; font-family: ui-monospace, Consolas, monospace; font-size: 1rem; font-weight: 800; }
     .debug-note { margin: 14px 0 0; color: var(--muted); font-size: .8rem; }
+    .stop-mode { width: 100%; margin: 8px 0; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+    .stop-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+    .stop-grid label { color: var(--muted); font-size: .75rem; }
+    .stop-grid input { width: 100%; padding: 7px; border: 1px solid var(--line); border-radius: 7px; }
     @media (max-width: 850px) {
       .dashboard { grid-template-columns: 1fr; }
       .data-grid { grid-template-columns: repeat(3, 1fr); }
@@ -789,7 +807,7 @@ def index():
         <article id="speed-card" class="status-card speed"><span class="icon" aria-hidden="true">⚡</span><p class="card-label">スピード</p><p id="speed" class="card-value">—</p></article>
         <article id="motion-card" class="status-card motion"><span id="motion-icon" class="icon" aria-hidden="true">■</span><p class="card-label">ロボット</p><p id="motion" class="card-value">ストップ！</p><p id="motion-note" class="card-note">ぬいぐるみを待っています</p></article>
         <article id="control-card" class="status-card control"><span id="control-icon" class="icon" aria-hidden="true">—</span><p class="card-label">フォースセンサ</p><p id="control" class="card-value">状態不明</p><p id="control-note" class="card-note">ロボットからの通信を待っています</p></article>
-        <article id="safety-card" class="status-card safety"><span id="safety-icon" class="icon" aria-hidden="true">—</span><p class="card-label">黒線ストップ</p><p id="safety" class="card-value">状態不明</p><p id="safety-note" class="card-note">ロボットからの通信を待っています</p></article>
+        <article id="safety-card" class="status-card safety"><span id="safety-icon" class="icon" aria-hidden="true">—</span><p class="card-label">緊急停止センサ</p><p id="safety" class="card-value">状態不明</p><p id="safety-note" class="card-note">ロボットからの通信を待っています</p></article>
         <section class="status-card tuning" aria-labelledby="gain-title">
           <div class="tuning-head"><h2 id="gain-title" class="tuning-title">モータ感度</h2><output id="gain-value" class="gain-value" for="gain">1.50 倍</output></div>
           <input id="gain" class="gain-slider" type="range" min="0.5" max="6.0" step="0.1" value="1.5" aria-describedby="gain-note">
@@ -800,6 +818,19 @@ def index():
           <div class="tuning-head"><label for="black-threshold" class="tuning-title">黒線の判定値</label><output id="black-threshold-value" class="gain-value" for="black-threshold">8</output></div>
           <input id="black-threshold" class="gain-slider" type="range" min="0" max="100" step="1" value="8">
           <p class="card-note">薄茶色で停止する場合は小さくします。小さすぎると黒線を見逃すため、実際の床で確認してください。</p>
+          <label for="stop-mode" class="tuning-title">緊急停止の条件</label>
+          <select id="stop-mode" class="stop-mode">
+            <option value="0">無効</option><option value="1">反射率（黒）</option><option value="2">RGB範囲</option>
+          </select>
+          <div class="stop-grid">
+            <label>R 最小<input id="r-min" type="number" min="0" max="1023"></label>
+            <label>R 最大<input id="r-max" type="number" min="0" max="1023"></label>
+            <label>G 最小<input id="g-min" type="number" min="0" max="1023"></label>
+            <label>G 最大<input id="g-max" type="number" min="0" max="1023"></label>
+            <label>B 最小<input id="b-min" type="number" min="0" max="1023"></label>
+            <label>B 最大<input id="b-max" type="number" min="0" max="1023"></label>
+          </div>
+          <p id="sensor-rgb" class="pwm-readout">現在のRGB: 通信待ち</p>
           <p id="pwm-readout" class="pwm-readout">計算PWM: L=0 / R=0</p>
           <p id="robot-pwm-readout" class="pwm-readout">ロボット適用PWM: 通信待ち</p>
           <p class="card-note">※ 計算した指令値です。モータが実際に回転したことを検知する表示ではありません。</p>
@@ -872,7 +903,7 @@ def index():
           $('control-icon').textContent = robotFresh ? (controlEnabled ? '▶' : '■') : '—';
           $('control-card').classList.toggle('enabled', controlEnabled);
           setCard('safety', robotFresh ? (blackStop ? '作動中！' : '解除') : '状態不明');
-          $('safety-note').textContent = robotFresh ? (blackStop ? '黒線を検知して停止しています' : '黒線は検知していません') : 'ロボットからの通信を待っています';
+          $('safety-note').textContent = robotFresh ? (blackStop ? '設定した色・明るさを検知して停止中です' : '停止条件は検知していません') : 'ロボットからの通信を待っています';
           $('safety-icon').textContent = robotFresh ? (blackStop ? '●' : '○') : '—';
           $('safety-card').classList.toggle('active', blackStop);
 
@@ -886,6 +917,8 @@ def index():
           const robotLeft = Number(data.robot_left_pwm), robotRight = Number(data.robot_right_pwm);
           $('robot-pwm-readout').textContent = robotFresh && Number.isFinite(robotLeft) && Number.isFinite(robotRight)
             ? `ロボット適用PWM: L=${robotLeft} / R=${robotRight}` : 'ロボット適用PWM: 通信待ち';
+          const rgb = data.sensor_rgb;
+          $('sensor-rgb').textContent = robotFresh && rgb ? `現在のRGB: R=${rgb[0]} G=${rgb[1]} B=${rgb[2]}` : '現在のRGB: 通信待ち';
           if (!settingsEditing) {
             $('gain').value = Number(data.speed_gain).toFixed(1);
             $('gain-value').textContent = Number(data.speed_gain).toFixed(2) + ' 倍';
@@ -893,6 +926,10 @@ def index():
             $('deadzone-value').textContent = Math.round(Number(data.deadzone) * 100) + '%';
             $('black-threshold').value = String(data.black_threshold);
             $('black-threshold-value').textContent = String(data.black_threshold);
+            $('stop-mode').value = String(data.stop_mode);
+            for (const name of ['r_min','r_max','g_min','g_max','b_min','b_max']) {
+              $(name.replace('_','-')).value = String(data.rgb_stop[name]);
+            }
           }
           $('connection').classList.remove('offline'); $('connection').lastElementChild.textContent = 'つながっています';
           previous = data;
@@ -903,6 +940,13 @@ def index():
       const saveSettings = async () => {
         const gain = Number($('gain').value), deadzone = Number($('deadzone').value);
         const blackThreshold = Number($('black-threshold').value);
+        const payload = {
+          speed_gain: gain, deadzone, black_threshold: blackThreshold,
+          stop_mode: Number($('stop-mode').value)
+        };
+        for (const name of ['r_min','r_max','g_min','g_max','b_min','b_max']) {
+          payload[name] = Number($(name.replace('_','-')).value);
+        }
         $('gain-value').textContent = gain.toFixed(2) + ' 倍';
         $('deadzone-value').textContent = Math.round(deadzone * 100) + '%';
         $('black-threshold-value').textContent = String(blackThreshold);
@@ -911,13 +955,13 @@ def index():
           try {
             const response = await fetch('/settings', {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ speed_gain: gain, deadzone, black_threshold: blackThreshold })
+              body: JSON.stringify(payload)
             });
             if (!response.ok) throw new Error(response.status);
           } finally { settingsEditing = false; }
         }, 180);
       };
-      for (const id of ['gain', 'deadzone', 'black-threshold']) {
+      for (const id of ['gain','deadzone','black-threshold','stop-mode','r-min','r-max','g-min','g-max','b-min','b-max']) {
         $(id).addEventListener('input', () => { settingsEditing = true; saveSettings(); });
       }
       update(); setInterval(update, 600);
@@ -942,6 +986,9 @@ def status():
         robot_left_pwm = latest_robot_left_pwm
         robot_right_pwm = latest_robot_right_pwm
         black_threshold = latest_black_threshold
+        stop_mode = latest_stop_mode
+        rgb_stop = latest_rgb_stop.copy()
+        sensor_rgb = latest_sensor_rgb
 
     robot_status_fresh = time.monotonic() - robot_status_time <= 1.0
 
@@ -963,14 +1010,21 @@ def status():
         "robot_left_pwm": robot_left_pwm if robot_status_fresh else None,
         "robot_right_pwm": robot_right_pwm if robot_status_fresh else None,
         "black_threshold": black_threshold,
+        "stop_mode": stop_mode,
+        "rgb_stop": rgb_stop,
+        "sensor_rgb": sensor_rgb if robot_status_fresh else None,
     })
 
 
 @app.post("/settings")
 def settings():
-    """Web画面からモータ出力倍率を安全な範囲で更新する。"""
+    """Web画面から走行と緊急停止の設定を更新する。"""
     payload = request.get_json(silent=True) or {}
-    if not ({"speed_gain", "deadzone", "black_threshold"} & payload.keys()):
+    supported = {
+        "speed_gain", "deadzone", "black_threshold", "stop_mode",
+        "r_min", "r_max", "g_min", "g_max", "b_min", "b_max",
+    }
+    if not (supported & payload.keys()):
         return jsonify({"error": "no supported setting supplied"}), 400
 
     def validated_number(name, current, low, high):
@@ -987,6 +1041,8 @@ def settings():
     global latest_speed_gain
     global latest_deadzone
     global latest_black_threshold
+    global latest_stop_mode
+    global latest_rgb_stop
     with state_lock:
         try:
             speed_gain = validated_number(
@@ -995,21 +1051,38 @@ def settings():
             deadzone = validated_number(
                 "deadzone", latest_deadzone, DEADZONE_MIN, DEADZONE_MAX
             )
-            black_threshold = validated_number(
-                "black_threshold",
-                latest_black_threshold,
-                BLACK_THRESHOLD_MIN,
-                BLACK_THRESHOLD_MAX,
-            )
+            black_threshold = int(round(validated_number(
+                "black_threshold", latest_black_threshold,
+                BLACK_THRESHOLD_MIN, BLACK_THRESHOLD_MAX,
+            )))
+            stop_mode = int(round(validated_number(
+                "stop_mode", latest_stop_mode,
+                STOP_MODE_DISABLED, STOP_MODE_RGB,
+            )))
+            rgb_stop = {
+                name: int(round(validated_number(
+                    name, latest_rgb_stop[name], SENSOR_RGB_MIN, SENSOR_RGB_MAX
+                )))
+                for name in RGB_STOP_DEFAULTS
+            }
+            for color in ("r", "g", "b"):
+                if rgb_stop[f"{color}_min"] > rgb_stop[f"{color}_max"]:
+                    raise ValueError(f"{color}_min must be <= {color}_max")
         except ValueError as error:
             return jsonify({"error": str(error)}), 400
+
         latest_speed_gain = speed_gain
         latest_deadzone = deadzone
-        latest_black_threshold = int(round(black_threshold))
+        latest_black_threshold = black_threshold
+        latest_stop_mode = stop_mode
+        latest_rgb_stop = rgb_stop
+
     return jsonify({
         "speed_gain": speed_gain,
         "deadzone": deadzone,
-        "black_threshold": latest_black_threshold,
+        "black_threshold": black_threshold,
+        "stop_mode": stop_mode,
+        "rgb_stop": rgb_stop,
     })
 
 
