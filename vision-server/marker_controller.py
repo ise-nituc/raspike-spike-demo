@@ -109,6 +109,16 @@ latest_black_stop = None
 latest_robot_status_time = 0.0
 latest_speed_gain = max(SPEED_GAIN_MIN, min(SPEED_GAIN_DEFAULT, SPEED_GAIN_MAX))
 latest_deadzone = max(DEADZONE_MIN, min(DEADZONE_DEFAULT, DEADZONE_MAX))
+
+# 操縦アルゴリズム
+# legacy   : 前後=マーカー中心の上下、旋回=赤→緑の向き（従来方式）
+# centroid : 前後=マーカー中心の上下、旋回=マーカー中心の左右（ジョイスティック方式）
+CONTROL_MODE_LEGACY = "legacy"
+CONTROL_MODE_CENTROID = "centroid"
+CONTROL_MODES = {CONTROL_MODE_LEGACY, CONTROL_MODE_CENTROID}
+latest_control_mode = os.environ.get("RASPIKE_CONTROL_MODE", CONTROL_MODE_LEGACY)
+if latest_control_mode not in CONTROL_MODES:
+    latest_control_mode = CONTROL_MODE_LEGACY
 latest_black_threshold = max(
     BLACK_THRESHOLD_MIN, min(BLACK_THRESHOLD_DEFAULT, BLACK_THRESHOLD_MAX)
 )
@@ -371,6 +381,51 @@ def calculate_motor_command(
         forward=forward,
         turn=turn,
         distance_ratio=abs(forward_ratio),
+        theta_deg=angle_deg(marker.theta),
+    )
+
+
+def calculate_motor_command_centroid(
+    marker, speed_gain=SPEED_GAIN_DEFAULT, deadzone=DEADZONE_DEFAULT
+):
+    """
+    マーカー中心を2軸ジョイスティックとして扱う操縦方式。
+
+    - 上下方向のずれ -> 前進／後退
+    - 左右方向のずれ -> 左／右旋回
+
+    赤→緑の向き(theta)は操縦には使わない。
+    """
+    image_cx = WIDTH / 2.0
+    image_cy = HEIGHT / 2.0
+
+    # 画面上を前進、画面右を右旋回とする。
+    dx = marker.cx - image_cx
+    dy = image_cy - marker.cy
+
+    forward_ratio = clip(dy / ACTIVE_RADIUS, -1.0, 1.0)
+    turn_ratio = clip(dx / ACTIVE_RADIUS, -1.0, 1.0)
+
+    forward = apply_deadzone(forward_ratio, deadzone)
+    turn = apply_deadzone(turn_ratio, TURN_DEADZONE)
+
+    # 中央を出た直後から反応しやすくする既存カーブを両軸に適用。
+    forward = math.copysign(abs(forward) ** GAMMA, forward) if forward else 0.0
+    turn = math.copysign(abs(turn) ** GAMMA, turn) if turn else 0.0
+
+    strength = max(abs(forward), abs(turn))
+
+    left = speed_gain * (forward + TURN_GAIN * turn)
+    right = speed_gain * (forward - TURN_GAIN * turn)
+    left, right = normalize_motor_pair(left, right)
+
+    return MotorCommand(
+        left_pwm=int(round(PWM_MAX * left)),
+        right_pwm=int(round(PWM_MAX * right)),
+        strength=strength,
+        forward=forward,
+        turn=turn,
+        distance_ratio=min(1.0, math.hypot(dx, dy) / ACTIVE_RADIUS),
         theta_deg=angle_deg(marker.theta),
     )
 
@@ -665,9 +720,13 @@ def vision_loop():
             with state_lock:
                 speed_gain = latest_speed_gain
                 deadzone = latest_deadzone
+                control_mode = latest_control_mode
 
             if marker is not None:
-                cmd = calculate_motor_command(marker, speed_gain, deadzone)
+                if control_mode == CONTROL_MODE_CENTROID:
+                    cmd = calculate_motor_command_centroid(marker, speed_gain, deadzone)
+                else:
+                    cmd = calculate_motor_command(marker, speed_gain, deadzone)
             else:
                 # どちらかのマーカーを見失ったら、直前値を保持せず即停止する。
                 cmd = stop_command()
@@ -809,6 +868,12 @@ def index():
         <article id="control-card" class="status-card control"><span id="control-icon" class="icon" aria-hidden="true">—</span><p class="card-label">フォースセンサ</p><p id="control" class="card-value">状態不明</p><p id="control-note" class="card-note">ロボットからの通信を待っています</p></article>
         <article id="safety-card" class="status-card safety"><span id="safety-icon" class="icon" aria-hidden="true">—</span><p class="card-label">緊急停止センサ</p><p id="safety" class="card-value">状態不明</p><p id="safety-note" class="card-note">ロボットからの通信を待っています</p></article>
         <section class="status-card tuning" aria-labelledby="gain-title">
+          <label for="control-mode" class="tuning-title">操縦アルゴリズム</label>
+          <select id="control-mode" class="stop-mode">
+            <option value="legacy">従来方式（赤→緑の向きで旋回）</option>
+            <option value="centroid">重心追従（重心の左右位置で旋回）</option>
+          </select>
+          <p class="card-note">動作確認済みの従来方式を残したまま、重心追従を切り替えて試せます。</p>
           <div class="tuning-head"><h2 id="gain-title" class="tuning-title">モータ感度</h2><output id="gain-value" class="gain-value" for="gain">1.50 倍</output></div>
           <input id="gain" class="gain-slider" type="range" min="0.5" max="6.0" step="0.1" value="1.5" aria-describedby="gain-note">
           <p id="gain-note" class="card-note">大きくすると、同じぬいぐるみ操作でもモータ指令が強くなります。</p>
@@ -870,11 +935,11 @@ def index():
         if (card) { card.classList.remove('changed'); void card.offsetWidth; card.classList.add('changed'); }
       };
       const number = (value, digits) => Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '—';
-      const direction = theta => {
-        if (theta >= 135 || theta <= -135) return ['うしろ', '↓'];
-        if (theta > 45) return ['みぎ', '→'];
-        if (theta < -45) return ['ひだり', '←'];
-        return ['まっすぐ', '↑'];
+      const direction = (forward, turn) => {
+        const f = Number(forward) || 0, t = Number(turn) || 0;
+        if (Math.abs(f) < 0.05 && Math.abs(t) < 0.05) return ['まんなか', '●'];
+        if (Math.abs(t) > Math.abs(f)) return t > 0 ? ['みぎ', '→'] : ['ひだり', '←'];
+        return f >= 0 ? ['まっすぐ', '↑'] : ['うしろ', '↓'];
       };
       async function update() {
         try {
@@ -888,7 +953,7 @@ def index():
           const blackStop = robotFresh && data.black_stop === true;
           const moving = Math.max(Math.abs(left), Math.abs(right)) > 1 && controlEnabled && !blackStop;
           const strength = Math.max(Math.abs(left), Math.abs(right)) / (Number(data.pwm_max) || 100);
-          const [directionText, directionIcon] = direction(Number(data.theta_deg) || 0);
+          const [directionText, directionIcon] = direction(data.forward, data.turn);
 
           setCard('detect', found ? 'みつけたよ！' : 'さがしています…');
           $('detect-note').textContent = found ? 'ぬいぐるみの動きが見えています' : 'カメラの上にもどしてね';
@@ -920,6 +985,7 @@ def index():
           const rgb = data.sensor_rgb;
           $('sensor-rgb').textContent = robotFresh && rgb ? `現在のRGB: R=${rgb[0]} G=${rgb[1]} B=${rgb[2]}` : '現在のRGB: 通信待ち';
           if (!settingsEditing) {
+            $('control-mode').value = String(data.control_mode || 'legacy');
             $('gain').value = Number(data.speed_gain).toFixed(1);
             $('gain-value').textContent = Number(data.speed_gain).toFixed(2) + ' 倍';
             $('deadzone').value = Number(data.deadzone).toFixed(2);
@@ -941,6 +1007,7 @@ def index():
         const gain = Number($('gain').value), deadzone = Number($('deadzone').value);
         const blackThreshold = Number($('black-threshold').value);
         const payload = {
+          control_mode: $('control-mode').value,
           speed_gain: gain, deadzone, black_threshold: blackThreshold,
           stop_mode: Number($('stop-mode').value)
         };
@@ -961,7 +1028,7 @@ def index():
           } finally { settingsEditing = false; }
         }, 180);
       };
-      for (const id of ['gain','deadzone','black-threshold','stop-mode','r-min','r-max','g-min','g-max','b-min','b-max']) {
+      for (const id of ['control-mode','gain','deadzone','black-threshold','stop-mode','r-min','r-max','g-min','g-max','b-min','b-max']) {
         $(id).addEventListener('input', () => { settingsEditing = true; saveSettings(); });
       }
       update(); setInterval(update, 600);
@@ -983,6 +1050,7 @@ def status():
         robot_status_time = latest_robot_status_time
         speed_gain = latest_speed_gain
         deadzone = latest_deadzone
+        control_mode = latest_control_mode
         robot_left_pwm = latest_robot_left_pwm
         robot_right_pwm = latest_robot_right_pwm
         black_threshold = latest_black_threshold
@@ -1005,6 +1073,7 @@ def status():
         "black_stop": black_stop if robot_status_fresh else None,
         "robot_status_fresh": robot_status_fresh,
         "speed_gain": speed_gain,
+        "control_mode": control_mode,
         "pwm_max": PWM_MAX,
         "deadzone": deadzone,
         "robot_left_pwm": robot_left_pwm if robot_status_fresh else None,
@@ -1021,7 +1090,7 @@ def settings():
     """Web画面から走行と緊急停止の設定を更新する。"""
     payload = request.get_json(silent=True) or {}
     supported = {
-        "speed_gain", "deadzone", "black_threshold", "stop_mode",
+        "control_mode", "speed_gain", "deadzone", "black_threshold", "stop_mode",
         "r_min", "r_max", "g_min", "g_max", "b_min", "b_max",
     }
     if not (supported & payload.keys()):
@@ -1038,6 +1107,7 @@ def settings():
             raise ValueError(f"{name} must be finite")
         return clip(value, low, high)
 
+    global latest_control_mode
     global latest_speed_gain
     global latest_deadzone
     global latest_black_threshold
@@ -1045,6 +1115,9 @@ def settings():
     global latest_rgb_stop
     with state_lock:
         try:
+            control_mode = payload.get("control_mode", latest_control_mode)
+            if control_mode not in CONTROL_MODES:
+                raise ValueError("control_mode must be legacy or centroid")
             speed_gain = validated_number(
                 "speed_gain", latest_speed_gain, SPEED_GAIN_MIN, SPEED_GAIN_MAX
             )
@@ -1071,6 +1144,7 @@ def settings():
         except ValueError as error:
             return jsonify({"error": str(error)}), 400
 
+        latest_control_mode = control_mode
         latest_speed_gain = speed_gain
         latest_deadzone = deadzone
         latest_black_threshold = black_threshold
@@ -1078,6 +1152,7 @@ def settings():
         latest_rgb_stop = rgb_stop
 
     return jsonify({
+        "control_mode": control_mode,
         "speed_gain": speed_gain,
         "deadzone": deadzone,
         "black_threshold": black_threshold,
