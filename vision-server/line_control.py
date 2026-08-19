@@ -10,6 +10,7 @@ DEFAULT_SETTINGS = {
     "straight_speed": 45,
     "curve_speed": 25,
     "turn_gain": 55.0,
+    "stop_reflection_threshold": 8,
 }
 
 SETTING_RANGES = {
@@ -19,10 +20,12 @@ SETTING_RANGES = {
     "straight_speed": (0, 100),
     "curve_speed": (0, 100),
     "turn_gain": (0.0, 100.0),
+    "stop_reflection_threshold": (0, 100),
 }
 
 INTEGER_SETTINGS = {
-    "black_value", "white_value", "straight_speed", "curve_speed"
+    "black_value", "white_value", "straight_speed", "curve_speed",
+    "stop_reflection_threshold",
 }
 
 
@@ -80,3 +83,22 @@ def calculate_motor_pwm(steering, confidence, settings):
     left = int(round(max(-100, min(100, base + turn))))
     right = int(round(max(-100, min(100, base - turn))))
     return left, right
+
+
+def parse_pwm_request(request):
+    """PWMクライアント要求を検証し、拡張応答が必要かを返す。"""
+    parts = request.split()
+    if parts == ["GET"]:
+        return False
+    if (
+        len(parts) == 5
+        and parts[0] == "GET"
+        and parts[1] in {"0", "1"}
+        and parts[2] in {"0", "1"}
+    ):
+        try:
+            int(parts[3])
+            int(parts[4])
+        except ValueError:
+            return None
+        return True

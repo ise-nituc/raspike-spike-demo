@@ -11,7 +11,7 @@ except ModuleNotFoundError:
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from line_control import LineTraceSettings, calculate_motor_pwm
+from line_control import LineTraceSettings, calculate_motor_pwm, parse_pwm_request
 if cv2 is not None:
     from detect_line import estimate_steering
 
@@ -61,6 +61,16 @@ class MotorControlTest(unittest.TestCase):
             self.assertEqual(reloaded.load()["black_value"], 30)
             with self.assertRaises(ValueError):
                 store.update({"black_value": 200, "white_value": 100})
+
+    def test_current_pwm_request_uses_extended_response(self):
+        self.assertTrue(parse_pwm_request("GET 1 0 42 38"))
+
+    def test_legacy_pwm_request_uses_legacy_response(self):
+        self.assertFalse(parse_pwm_request("GET"))
+
+    def test_invalid_pwm_request_is_rejected(self):
+        self.assertIsNone(parse_pwm_request("GET 1 0 unknown 38"))
+        self.assertIsNone(parse_pwm_request("GET 1 0"))
 
 
 if __name__ == "__main__":

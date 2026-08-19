@@ -76,6 +76,7 @@
           <label><span>直線の速さ</span>まっすぐな場所での基本速度<input name="straight_speed" type="number" min="0" max="100" required></label>
           <label><span>カーブの速さ</span>急カーブでの基本速度<input name="curve_speed" type="number" min="0" max="100" required></label>
           <label><span>曲がる強さ</span>左右モーターの速度差<input name="turn_gain" type="number" min="0" max="100" step="0.5" required></label>
+          <label><span>停止用黒判定</span>本体光センサーの反射率（0～100）<input name="stop_reflection_threshold" type="number" min="0" max="100" required></label>
         </div>
         <button type="submit">設定を保存</button><span id="message" role="status"></span>
       </form>
