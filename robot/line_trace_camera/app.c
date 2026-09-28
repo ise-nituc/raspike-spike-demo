@@ -3,6 +3,7 @@
 #include "LineTracer.h"
 
 #include "spike/pup/forcesensor.h"
+#include "spike/hub/display.h"
 
 /* センサーポートの定義 */
 static const pbio_port_id_t
@@ -12,15 +13,23 @@ static const pbio_port_id_t
   force_sensor_port    = PBIO_PORT_ID_D;
 
 static void wait_force_sensor_pressed(pup_device_t *force_sensor) {
-  while (!pup_force_sensor_touched(force_sensor)) {
+  while (!pup_force_sensor_pressed(force_sensor,FORCE_SENSOR_PRESSED)) {
     dly_tsk(10 * 1000);
   }
 }
 
 static void wait_force_sensor_released(pup_device_t *force_sensor) {
-  while (pup_force_sensor_touched(force_sensor)) {
+  while (pup_force_sensor_pressed(force_sensor,FORCE_SENSOR_PRESSED)) {
     dly_tsk(10 * 1000);
   }
+}
+
+static void display_run(){
+  hub_display_image(&DISPLAY_PATTERN[RUN_STATUS][0][0]);
+}
+
+static void display_pouse(){
+  hub_display_image(&DISPLAY_PATTERN[POUSE_STATUS][0][0]);
 }
 
 void main_task(intptr_t unused) {
@@ -41,6 +50,10 @@ void main_task(intptr_t unused) {
    */
   LineTracer_Pause();
   sta_cyc(LINE_TRACER_TASK_CYC);
+  
+  // while(1){
+  //   printf("%lfN\n",pup_force_sensor_force(force_sensor));
+  // } 
 
   while (1) {
     printf("Standby mode. Press force sensor to start.\n");
@@ -50,6 +63,7 @@ void main_task(intptr_t unused) {
 
     printf("Resume Line Trace!!\n");
     LineTracer_Resume();
+    display_run();
 
     printf("Running. Press force sensor again to pause.\n");
 
@@ -58,5 +72,6 @@ void main_task(intptr_t unused) {
 
     printf("Pause Line Trace. Motor off.\n");
     LineTracer_Pause();
+    display_pouse();
   }
 }
