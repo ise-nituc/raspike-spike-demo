@@ -3,7 +3,6 @@
 #include "LineTracerControl.h"
 
 #include <stddef.h>
-#include <stdlib.h>
 
 #include "spike/pup/colorsensor.h"
 #include "spike/pup/motor.h"
@@ -11,9 +10,6 @@
 static pup_motor_t *left_motor;
 static pup_motor_t *right_motor;
 static pup_device_t *color_sensor;
-static float difference=0;
-//static float brightness=0;
-static int steering=0;
 
 static int threshold(void)
 {
@@ -117,15 +113,11 @@ int32_t brightness(void)
 
 bool black(void)
 {
-    difference = (float)abs((brightness() - threshold()));
-    steering = (int)(difference * STEERING_COEF);
     return brightness() < threshold();
 }
 
 bool white(void)
 {
-    difference = (float)abs((brightness() - threshold()));
-    steering = (int)(difference * STEERING_COEF);
     return !black();
 }
 
@@ -141,12 +133,12 @@ void forward(void)
 
 void left(void)
 {
-    drive(BASE_SPEED - steering, BASE_SPEED + steering);
+    drive(TURN_SPEED, BASE_SPEED);
 }
 
 void right(void)
 {
-    drive(BASE_SPEED + steering, BASE_SPEED - steering);
+    drive(BASE_SPEED, TURN_SPEED);
 }
 
 /*void smooth_trace(void)

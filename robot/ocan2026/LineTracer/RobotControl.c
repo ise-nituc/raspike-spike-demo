@@ -47,6 +47,8 @@ static bool stop_learning(void)
     /* 先にゲートを閉じてゼロ出力。学習タスクの正常終了を待たない。 */
     output_ok = LineTracer_SetRunning(false);
     running = false;
+    /* 参照SDK: 未開始の周期もE_OK、休止タスクのcan_actは0、ter_tskはE_OBJ。
+     * E_OBJを許容するのはter_tskだけ。ID/未定義/コンテキストエラーは失敗。 */
     cycle_result = stp_cyc(LINE_TRACER_TASK_CYC);
     /* ter_tsk時の予約起動による再活性化を防ぐため、先に予約を消す。 */
     cancel_result = can_act(LINE_TRACER_TASK);

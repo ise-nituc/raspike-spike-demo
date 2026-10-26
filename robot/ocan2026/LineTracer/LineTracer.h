@@ -17,7 +17,7 @@ extern "C" {
 #define BLACK_BRIGHTNESS  (0)
 #define STEERING_COEF     (1.5F)
 #define BASE_SPEED        (50)
-#define TURN_SPEED        (5)
+#define TURN_SPEED        (5) /* 左右旋回時の内側車輪。外側はBASE_SPEED */
 
 bool LineTracer_Configure(pbio_port_id_t left_motor_port,
                           pbio_port_id_t right_motor_port,
@@ -28,6 +28,7 @@ bool black(void);
 bool white(void);
 void stop(void);
 void forward(void);
+/* black/whiteの呼出し履歴によらず固定の左右差で旋回する。 */
 void left(void);
 void right(void);
 

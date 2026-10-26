@@ -18,6 +18,8 @@ static ER start_result, stop_result, terminate_result, cancel_result, motor_resu
 static ER lock_result;
 static int monitor_ticks;
 static int reflection;
+static ER observed_stop, observed_terminate;
+static ER_UINT observed_cancel;
 static jmp_buf monitor_exit;
 
 ER loc_cpu(void) {
@@ -33,14 +35,20 @@ ER sta_cyc(int id) {
 ER stp_cyc(int id) {
     assert(id == LINE_TRACER_TASK_CYC); ++stop_calls;
     if (stop_result == E_OK) cycle_active = false;
+    observed_stop = stop_result;
     return stop_result;
 }
 ER ter_tsk(int id) {
     assert(id == LINE_TRACER_TASK);
     assert(cancel_calls == terminate_calls + 1); /* cancel queued restart before termination */
-    ++terminate_calls; return terminate_result;
+    ++terminate_calls;
+    observed_terminate = terminate_result;
+    return terminate_result;
 }
-ER_UINT can_act(int id) { assert(id == LINE_TRACER_TASK); ++cancel_calls; return cancel_result; }
+ER_UINT can_act(int id) {
+    assert(id == LINE_TRACER_TASK); ++cancel_calls;
+    observed_cancel = cancel_result; return cancel_result;
+}
 ER dly_tsk(unsigned int delay) {
     assert(delay == BUTTON_POLL_PERIOD_US);
     if (++monitor_ticks > 12) longjmp(monitor_exit, 1);
@@ -139,7 +147,7 @@ static void test_button_and_output(void) {
     /* Normal sample task still compiles and publishes through the same mailbox. */
     reflection = 1000;
     tracer_task(0); samples(true, 1);
-    assert(left_power == -100 && right_power == 100);
+    assert(left_power == TURN_SPEED && right_power == BASE_SPEED);
     press();
     assert(!cycle_active && left_power == 0 && right_power == 0);
 }
@@ -180,6 +188,41 @@ static void test_faults_latch(void) {
     assert(!LineTracer_FlushOutput());
     forward(); assert(!lock_held);
 }
+/* Return values verified against the pinned SDK source, not an SDK runtime test. */
+static void test_initial_stop_contract(void) {
+    reset();
+    assert(stop_calls == 1 && cancel_calls == 1 && terminate_calls == 1);
+    assert(observed_stop == E_OK && observed_cancel == 0 && observed_terminate == E_OBJ);
+    assert(start_calls == 0 && !cycle_active);
+    forward(); samples(false, 8);
+    assert(left_power == 0 && right_power == 0);
+    press(); assert(start_calls == 1); /* init did not latch a false fault */
+
+    reset(); stop_result = E_OBJ;
+    assert(!RobotControl_Init(PBIO_PORT_ID_D));
+    stop_result = E_OK; press(); assert(start_calls == 0);
+    reset(); cancel_result = E_OBJ;
+    assert(!RobotControl_Init(PBIO_PORT_ID_D));
+    cancel_result = 0; press(); assert(start_calls == 0);
+}
+static void test_standalone_turns(void) {
+    reset(); press();
+    /* No black/white call before the replacement exercise. */
+    left(); samples(true, 1);
+    assert(left_power == TURN_SPEED && right_power == BASE_SPEED);
+    right(); samples(true, 1);
+    assert(left_power == BASE_SPEED && right_power == TURN_SPEED);
+    forward(); samples(true, 1);
+    assert(left_power == BASE_SPEED && right_power == BASE_SPEED);
+    reflection = 0; assert(black());
+    left(); samples(true, 1);
+    assert(left_power == TURN_SPEED && right_power == BASE_SPEED);
+    reflection = 100; assert(white());
+    right(); samples(true, 1);
+    assert(left_power == BASE_SPEED && right_power == TURN_SPEED);
+    press(); left(); right(); samples(true, 1);
+    assert(left_power == 0 && right_power == 0);
+}
 static void test_main_stays_waiting(void) {
     reset(); pressed = true;
     if (setjmp(monitor_exit) == 0) main_task(0);
@@ -187,6 +230,8 @@ static void test_main_stays_waiting(void) {
     assert(left_power == 0 && right_power == 0);
 }
 int main(void) {
+    test_initial_stop_contract();
+    test_standalone_turns();
     test_button_and_output();
     test_faults_latch();
     test_main_stays_waiting();
