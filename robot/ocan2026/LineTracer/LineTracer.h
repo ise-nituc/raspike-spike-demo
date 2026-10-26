@@ -19,7 +19,7 @@ extern "C" {
 #define BASE_SPEED        (50)
 #define TURN_SPEED        (5)
 
-void LineTracer_Configure(pbio_port_id_t left_motor_port,
+bool LineTracer_Configure(pbio_port_id_t left_motor_port,
                           pbio_port_id_t right_motor_port,
                           pbio_port_id_t color_sensor_port);
 
