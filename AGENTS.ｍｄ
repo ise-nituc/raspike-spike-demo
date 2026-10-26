@@ -1,0 +1,110 @@
+# AGENTS.md
+
+## Project overview
+
+This repository contains educational and demonstration programs for Raspberry Pi 4 and LEGO SPIKE Prime using RasPike-ART.
+
+The system consists of:
+
+- C applications for robot control
+- Python camera and vision servers
+- A Flask-based web dashboard
+- Bash scripts for building, running, and configuring the system
+- Documentation for instructors and students
+
+Primary use cases are laboratory exercises, student development, open-campus activities, and demonstrations.
+
+Prioritize safety, compatibility, maintainability, and educational clarity.
+
+## Repository structure
+
+- `robot/`: RasPike-ART applications written in C
+- `vision-server/`: Camera processing, line detection, marker tracking, and PWM control
+- `dashboard/`: Flask web UI and systemd integration
+- `scripts/`: Build, startup, shutdown, network, and setup utilities
+- `docs/`: Design documents and student instructions
+
+Important robot applications:
+
+- `robot/ocan2026/`: Introductory sensor-based line tracing
+- `robot/direct_pwm_camera/`: Receives motor PWM commands from a Python TCP server
+- `robot/line_trace_camera/`: Legacy camera-based line tracer
+
+## Source of truth
+
+Inspect the current implementation before making changes.
+
+Some documentation describes earlier implementations and may be outdated.
+
+In particular:
+
+- Robot applications are built from source directories under `robot/`.
+- `scripts/build-robot` uses the external RasPike-ART workspace.
+- The current build mechanism uses `make img=...`, not the older copy-based `make app=...` workflow.
+- `docs/dashboard-proposal.md` is an initial design proposal, not necessarily the current implementation.
+
+When documentation conflicts with code, verify the intended behavior and update documentation accordingly. Do not silently change established behavior merely to match outdated documentation.
+
+## Development environment
+
+The target environment is a Raspberry Pi running Linux, with a separately installed RasPike-ART SDK.
+
+The expected SDK location is:
+
+`~/RasPike-ART/sdk/workspace`
+
+The SDK itself is not included in this repository.
+
+Do not copy SDK sources, locally generated binaries, machine-specific configuration, credentials, or virtual environments into the repository.
+
+Do not assume that Raspberry Pi hardware, SPIKE Prime, Picamera2, or the RasPike-ART SDK is available in the development environment.
+
+## Robot control and safety
+
+Safety-sensitive behavior must be preserved unless a change is explicitly requested and reviewed.
+
+Requirements include:
+
+- Keep motor PWM commands within the supported range of -100 to 100.
+- Preserve motor stop behavior on communication failure.
+- Preserve pause and emergency-stop behavior.
+- Avoid unintended motor activation during startup or shutdown.
+- Preserve documented sensor and motor port assignments unless explicitly changing the hardware configuration.
+- Do not introduce uncontrolled automatic robot execution.
+- Treat changes to communication protocols and timing as potentially safety-critical.
+
+For hardware-related changes, distinguish static validation from actual hardware verification.
+
+Never claim that robot behavior has been tested on real hardware unless such testing was actually performed.
+
+## Python vision servers
+
+The Python vision servers communicate with robot applications using TCP.
+
+Important compatibility constraints:
+
+- The existing control protocol must remain compatible unless a deliberate migration is approved.
+- Preserve documented PWM limits and stop behavior.
+- Keep line-tracing and marker-control functionality distinct.
+- Avoid simultaneous use of the same camera by conflicting services.
+- Maintain backward compatibility where existing clients depend on legacy requests or responses.
+
+Avoid unnecessary camera initialization or hardware access during unit tests.
+
+Prefer extracting testable computational logic from hardware-dependent code.
+
+## Dashboard and system services
+
+The dashboard uses Flask and systemd services to manage demonstration programs.
+
+The registered programs and ports are defined in:
+
+`dashboard/programs.json`
+
+Current web ports are:
+
+- 8080: Line tracing vision server
+- 8081: Marker controller
+- 8082: Dashboard
+
+Treat these as current
