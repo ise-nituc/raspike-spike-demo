@@ -4,6 +4,7 @@ mkfile_path := $(dir $(lastword $(MAKEFILE_LIST)))
 
 APPL_COBJS +=\
 LineTracer.o\
+RobotControl.o\
 
 APPL_LIBS += -lm
 
