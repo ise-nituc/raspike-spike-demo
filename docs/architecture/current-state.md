@@ -2,6 +2,8 @@
 
 調査日: 2026-10-26。対象: `ise-nituc/raspike-spike-demo` の `bb0c4efc0879299ff7d77fcfa7032bbbd67800f1`。本書はリポジトリの静的調査であり、Pi上の配置、導入済みunit、SDK、モーターの実動作は未確認。実装・設定は変更していない。
 
+第2回の方針: ブラウザとの通信断では自動停止せず、Heartbeat/leaseを走行条件にしない。機体のフォースセンサー切替を必須とし、Pi内の画像/制御指令更新停止・Python–C通信断の安全停止とは分ける。以下は基準コミットの現状であり、この方針が実装済みという意味ではない。
+
 設計文書の入口: [不整合一覧](inconsistencies.md)、[推奨ワークフロー](development-workflow-proposal.md)、[Web編集検討](web-editor-feasibility.md)、[移行計画](migration-plan.md)。後三者は未実装の提案であり、現行の安全保証ではない。
 
 ## 1. ソースと生成物
