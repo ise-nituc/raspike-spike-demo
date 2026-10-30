@@ -1,6 +1,6 @@
 # 学生向け：ラズパイでの開発・保存・提出の手順
 
-対象は `raspike-spike-demo` の `direct_pwm_camera` を編集する学生です。Webダッシュボードはデモ用とし、普段の開発ではターミナルからSDKのコマンドを実行します。GitHubへの書き込み権限は不要です。
+対象は `raspike-spike-demo` の `direct_pwm_camera` を編集する学生です。Webダッシュボードはデモ用とし、普段の開発ではSSH／VS Code Remote SSHから名前指定ラッパーを実行します。GitHubへの書き込み権限は不要です。
 
 ## 1. 編集する場所
 
@@ -15,6 +15,13 @@
 `~` はログイン中のユーザーのホームディレクトリです。ソースのディレクトリ名は `robot`（単数形）です。SDKのworkspaceに同名フォルダがあっても、そちらは編集しません。
 
 SDK、Pythonの仮想環境、機体の接続は教員が設定済みとします。Webから起動したロボットと画像認識プログラムは作業前に停止してください。ダッシュボード自体は停止不要ですが、作業中にWebからプログラムを起動しないでください。モーターの確認は車輪を浮かせるなど教員指定の方法で行います。
+
+PCをPiと同じネットワークへ接続します。SSID・IPの確認は[接続案内](../README.md)を参照してください。
+PCのターミナルから、例えばID 04のAPへは `ssh iot@192.168.60.104` で接続します。
+ユーザー名は教員指定のものに置き換えます。
+VS CodeではRemote - SSH拡張を使って同じ接続先へ接続し、「フォルダーを開く」でPi上の
+`~/raspike-spike-demo` を開きます。接続先表示を確認し、リモートの `robot/` と `vision-server/` を
+編集・保存してください。VS Codeの統合ターミナルもPi側で開きます。PC上の別コピーやSDK内は編集しません。
 
 ## 2. 自分の作業ブランチを作る
 
@@ -62,46 +69,62 @@ nano robot/direct_pwm_camera/app.c
 
 `nano` は保存が `Ctrl+O` → Enter、終了が `Ctrl+X` です。別のエディタでも構いません。課題によっては `DirectPwmController/` 内のファイルを編集します。対象は課題の指示に従ってください。
 
-## 4. SDKでビルドする
+## 4. 名前を指定してビルドする
 
 ```bash
-cd ~/RasPike-ART/sdk/workspace
-make img=../../../raspike-spike-demo/robot/direct_pwm_camera
+cd ~/raspike-spike-demo
+./scripts/build-robot direct_pwm_camera
 ```
 
-`img=` の直後に空白を入れません。この相対パスはworkspaceから編集したソースを指しています。SDKへソースをコピーする必要はありません。
+ラッパーはリポジトリの `robot/direct_pwm_camera/` を直接参照し、SDK workspaceで
+`make img=<ソースへの相対パス>` を実行します。ソースコピー、`make app=...`、リンク作成は不要です。
+対象ソースとSDKのハッシュによるキャッシュがあれば `asp` を復元します。
+ビルド中・実行中は編集やブランチ切替をしないでください。
 
-成功するとworkspaceの実行ファイル `asp` が更新されます。ビルドに失敗したら修正してください。古い `asp` が残る可能性があるため、失敗後にそのまま実行してはいけません。
+失敗したらエラーを読んで修正します。古い `asp` が残る可能性があるため、失敗後に
+引数なしの `start-robot` や直接 `make start` で実行してはいけません。
 
-## 5. コンソールから実行する
+## 5. SSHから画像認識とロボットを実行する
 
-`direct_pwm_camera` はPythonサーバーから左右モーターの指令を受け取ります。黒線ライントレースの場合は別のターミナルで先に次を実行し、そのまま開いておきます。
+現行の黒線ライントレースは `vision-server/vision_server_picamera.py` と
+`robot/direct_pwm_camera/` の組合せです。旧 `robot/line_trace_camera/` は使いません。
+先に別のSSHターミナルでPythonを前景起動し、開いたままにします。
 
 ```bash
-cd ~/raspike-spike-demo/vision-server
-.venv/bin/python vision_server_picamera.py
+cd ~/raspike-spike-demo
+./scripts/start-vision
 ```
 
-マーカー追従の課題では代わりに `.venv/bin/python marker_controller.py` を使います。両方を同時に起動しないでください。
+このスクリプトは `vision-server/.venv` を使い、既存の同名Pythonプロセスを停止して起動します。
+Webで起動したサービスが残っている状態で実行しないでください。
+`http://<PiのIP>:8080/` で映像・検出結果を確認します。
+マーカー課題では代わりに `vision-server/` で `.venv/bin/python marker_controller.py` を前景起動します。
+二つのPythonはカメラとTCPポートを共有するため、同時に起動しません。
 
-ロボット側のターミナルで、ビルド成功後に実行します。
+ロボット側のSSHターミナルで実行します。
 
 ```bash
-cd ~/RasPike-ART/sdk/workspace
-make start
+cd ~/raspike-spike-demo
+./scripts/start-robot direct_pwm_camera
 ```
 
-`make start` は現在の `asp` を実行します。実行時にアプリ名は指定しません。フォースセンサーを押すと制御開始、もう一度押すと一時停止します。
+名前指定の `start-robot` はビルド（またはキャッシュ復元）も行うため、通常はこのコマンドだけで
+ビルド・起動できます。§4はビルドだけ確認したい場合の操作です。ビルド失敗時は起動に進みません。
+名前指定のビルドから実行までは共通ロックを保持します。Pythonは自動起動されません。
 
-終了は実行したターミナルで `Ctrl+C` を押し、プロンプトに戻って機体が停止したことを確認します。Python側もそのターミナルで `Ctrl+C` を押します。終了しない場合は重ねて起動せず、教員に確認してください。
+初期状態は一時停止です。フォースセンサーを押して離すと制御開始、次に押して離すと一時停止、
+さらに押して離すと再開します。[ポート配置と停止処理の限界](../robot/direct_pwm_camera/README.md)を確認してください。
 
-ビルド成功時だけ続けて実行する書き方もあります。
+終了時は機体を一時停止し、ロボットのターミナルで `Ctrl+C` を押してプロンプトと実機停止を確認します。
+その後Python側も `Ctrl+C` で終了します。`stop-vision` というスクリプトはありません。
+終了しない場合は重ねて起動せず、教員が確認した物理停止手段で対処してください。
+Ctrl+CやSSH切断を実機の停止保証として扱わないでください。
 
-```bash
-make img=../../../raspike-spike-demo/robot/direct_pwm_camera && make start
-```
-
-`&&` は左側のコマンドが成功した場合だけ右側を実行する指定です。
+Webはsystemd、SSHは前景プロセスで管理するため、開発中はWebから実行・停止しません。
+共通ロックはありますがsystemdの排他は手動PythonやSSH起動全体には適用されません。
+Webへ切り替える前にSSHで起動したPython・ロボットと待機中の要求を終了します。
+ブラウザとの通信断では自動停止しません。Python–C通信失敗の検出時の停止と、
+無応答・画像更新停止の未保証事項は[安全上の確認](../README.md#実行管理と安全上の確認)を参照してください。
 
 ## 6. 変更をcommitして保存する
 
@@ -172,7 +195,7 @@ git pull --ff-only
 
 変更は自分の作業ブランチに残ります。教員が取り込みを確認するまで、そのブランチとbundleを削除しないでください。配布版に戻すための `git restore` は不要です。
 
-**ブランチを切り替えても、ビルド済みの `asp` や実行中のプログラムは切り替わりません。** 別の版を動かすときは実行を停止し、切り替え後のソースで再ビルドします。
+**ブランチを切り替えても、ビルド済みの `asp` や実行中のプログラムは切り替わりません。** 別の版を動かすときは実行を停止し、切り替え後に `./scripts/start-robot direct_pwm_camera` でビルド・起動します。
 
 ## 教員向け：PCでの受け取り
 
@@ -212,7 +235,7 @@ git bundle create ~/s12345-pwm.bundle main..student/s12345-pwm
 
 ## 資料の前提
 
-リポジトリの実装確認基準はコミット `234196c` です。機体固有の配置や設定は教員が確認してください。
+リポジトリの実装確認基準は現行mainのコミット `f9b6188`（2026-10-30静的照合） です。実機試験は行っていません。機体固有の配置・設定、停止動作は教員が実機で確認してください。
 
 - リポジトリ：https://github.com/ise-nituc/raspike-spike-demo
 - Git bundle公式資料：https://git-scm.com/docs/git-bundle
